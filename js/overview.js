@@ -21,8 +21,117 @@ function formatCoachingFocusBadge(rawFocus) {
 
 renderTopNav("overview");
 
-const TAG_START = "[SOD/SOW Sent]";
-const TAG_END = "[EOD/EOW Sent]";
+const COLUMN_CONFIG = [
+  { key: "actions", label: "Actions", locked: true },
+  { key: "va", label: "VA", locked: true },
+  { key: "schedule", label: "Schedule" },
+  { key: "status", label: "Status Now" },
+  { key: "days", label: "Days" },
+  { key: "avgHrs", label: "Avg Hrs" },
+  { key: "late", label: "Late" },
+  { key: "earlyShort", label: "Early / Short" },
+  { key: "activity", label: "Activity" },
+  { key: "flagDays", label: "Flag Days" },
+  { key: "flags30d", label: "30d Flags" },
+  { key: "tlFlags", label: "TL Flags" },
+  { key: "coaching", label: "Coaching Focus" }
+];
+
+const HIDDEN_COLS_STORAGE_KEY = "kitsune_overview_hidden_cols";
+let hiddenCols = new Set();
+try {
+  const savedCols = JSON.parse(localStorage.getItem(HIDDEN_COLS_STORAGE_KEY) || "[]");
+  if (Array.isArray(savedCols)) hiddenCols = new Set(savedCols);
+} catch (_) {}
+
+function saveHiddenCols() {
+  try {
+    localStorage.setItem(HIDDEN_COLS_STORAGE_KEY, JSON.stringify([...hiddenCols]));
+  } catch (_) {}
+}
+
+function getVisibleColCount() {
+  return COLUMN_CONFIG.filter((c) => c.locked || !hiddenCols.has(c.key)).length;
+}
+
+function applyColumnVisibilityToHeader() {
+  COLUMN_CONFIG.forEach((col) => {
+    const th = document.querySelector(`th[data-col="${col.key}"]`);
+    if (!th) return;
+    if (!col.locked && hiddenCols.has(col.key)) {
+      th.classList.add("hidden");
+    } else {
+      th.classList.remove("hidden");
+    }
+  });
+}
+
+function syncStickyDrawerWidths() {
+  const tableWrapper = document.querySelector("#va-tbody")?.closest(".overflow-x-auto");
+  const visibleWidth = tableWrapper ? tableWrapper.clientWidth : window.innerWidth - 32;
+  document.querySelectorAll(".kitsune-sticky-drawer").forEach((el) => {
+    el.style.width = `${Math.max(visibleWidth - 16, 280)}px`;
+  });
+}
+
+window.addEventListener("resize", syncStickyDrawerWidths);
+
+function initColumnMenuUI() {
+  const menuBtn = document.getElementById("toggle-columns-menu-btn");
+  const dropdown = document.getElementById("columns-menu-dropdown");
+  const listEl = document.getElementById("columns-checkbox-list");
+  const resetBtn = document.getElementById("reset-columns-btn");
+
+  if (!menuBtn || !dropdown || !listEl) return;
+
+  const renderCheckboxes = () => {
+    listEl.innerHTML = COLUMN_CONFIG.filter((c) => !c.locked)
+      .map(
+        (col) => `
+        <label class="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-slate-800 cursor-pointer text-slate-200 select-none">
+          <input type="checkbox" ${!hiddenCols.has(col.key) ? "checked" : ""}
+                 onchange="window.toggleOverviewColumn('${col.key}', this.checked)"
+                 class="rounded bg-slate-950 border-slate-700 text-teal-500 cursor-pointer" />
+          <span>${escapeHtml(col.label)}</span>
+        </label>`
+      )
+      .join("");
+  };
+
+  renderCheckboxes();
+
+  menuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!dropdown.contains(e.target) && e.target !== menuBtn) {
+      dropdown.classList.add("hidden");
+    }
+  });
+
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      hiddenCols.clear();
+      saveHiddenCols();
+      renderCheckboxes();
+      applyColumnVisibilityToHeader();
+      renderDashboard();
+    });
+  }
+}
+
+window.toggleOverviewColumn = (colKey, isVisible) => {
+  if (isVisible) hiddenCols.delete(colKey);
+  else hiddenCols.add(colKey);
+  saveHiddenCols();
+  applyColumnVisibilityToHeader();
+  renderDashboard();
+};
+
+initColumnMenuUI();
+applyColumnVisibilityToHeader();
 
 let latestData = {};
 let sortMode = "schedule";
@@ -73,6 +182,7 @@ const sortSchedBtn =
   document.getElementById("sort-schedule-btn") ||
   Array.from(document.querySelectorAll("button")).find((b) => b.textContent.trim() === "Order by Schedule");
 const sortSheetBtn =
+  document.getElementById("sheet-order-btn") ||
   document.getElementById("sort-sheet-btn") ||
   Array.from(document.querySelectorAll("button")).find((b) => b.textContent.trim() === "Sheet Order");
 
@@ -121,6 +231,29 @@ window.toggleVaAccordion = (vaId) => {
   renderDashboard();
 };
 
+function findCurrentDateActivityForVa(vaName, tabObj, liveRows) {
+  if (!Array.isArray(liveRows) || !liveRows.length) return null;
+  const clean = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const targetVa = clean(vaName);
+  const fullName = clean((tabObj && tabObj.fullName) || "");
+  const tabName = clean((tabObj && tabObj.tabName) || "");
+  const firstTwo = (fullName || targetVa).split(" ").slice(0, 2).join(" ");
+
+  const matchingMemberRows = liveRows.filter((r) => {
+    const m = clean(r.member);
+    return (
+      m === targetVa ||
+      (fullName && m === fullName) ||
+      (tabName && m === tabName) ||
+      (firstTwo && m.startsWith(firstTwo))
+    );
+  });
+
+  if (!matchingMemberRows.length) return null;
+  matchingMemberRows.sort((a, b) => String(b.dateIso || b.date || "").localeCompare(String(a.dateIso || a.date || "")));
+  return matchingMemberRows[0];
+}
+
 function renderDashboard() {
   const data = latestData || {};
   const kpis = data.kpis || {};
@@ -130,6 +263,7 @@ function renderDashboard() {
     if (el) el.textContent = val;
   };
 
+  setText("sheet-updated", kpis.sheetUpdatedLabel || "Connected");
   setText("sheet-updated-label", kpis.sheetUpdatedLabel || "Connected");
   setText("kpi-total", kpis.totalVAs ?? "-");
   setText("kpi-logged", kpis.loggedInNow ?? "-");
@@ -148,9 +282,14 @@ function renderDashboard() {
   const order = Array.isArray(data.vaOrder) ? data.vaOrder : Object.keys(vas);
   const selectedTabData = data.selectedTabData || {};
   const siteProfiles = (data.siteData && data.siteData.vaProfiles) || {};
+  const liveData = data.hubstaffLive || {};
+  const liveRows = Array.isArray(liveData.rows) ? liveData.rows : Object.values(liveData.rows || {});
   const hiddenSet = getHiddenVaSet();
   const tbody = document.getElementById("va-tbody");
   if (!tbody) return;
+
+  applyColumnVisibilityToHeader();
+  const visibleColSpan = getVisibleColCount();
 
   const enrichedList = order
     .filter((id) => {
@@ -201,9 +340,11 @@ function renderDashboard() {
   }
 
   if (!filteredList.length) {
-    tbody.innerHTML = `<tr><td colspan="13" class="p-6 text-center text-slate-500">No VAs match the current filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${visibleColSpan}" class="p-6 text-center text-slate-500">No VAs match the current filter.</td></tr>`;
     return;
   }
+
+  const colCls = (key, base) => (!hiddenCols.has(key) ? base : `${base} hidden`);
 
   tbody.innerHTML = filteredList
     .map((item) => {
@@ -217,10 +358,13 @@ function renderDashboard() {
 
       const tabObj = matchedTab ? matchedTab.tab : null;
       const latestRow = tabObj && Array.isArray(tabObj.rows) && tabObj.rows.length ? tabObj.rows[tabObj.rows.length - 1] : null;
-      const notesText = latestRow ? String(latestRow.Notes || latestRow.notes || "") : "";
-      const hasSodSent = notesText.includes("[SOD/SOW Sent]");
-      const hasEodSent = notesText.includes("[EOD/EOW Sent]");
       const shiftDateVal = latestRow ? String(latestRow.Date || latestRow.Week || "Today").trim() : "Today";
+
+      const todayWorkSession = findCurrentDateActivityForVa(v.va, tabObj, liveRows);
+      const currentDateActBadge = todayWorkSession
+        ? formatConditionalActivityBadge(`${todayWorkSession.avgActivityPct ?? 0}%`)
+        : formatConditionalActivityBadge(v.avgActivity || "-");
+      const currentDateTracked = todayWorkSession ? todayWorkSession.totalDuration : v.avgHrsPerDay || "—";
 
       const isLoggedIn = String(v.statusNow || "").toLowerCase().includes("logged in");
       const statusBadge = isLoggedIn
@@ -232,8 +376,10 @@ function renderDashboard() {
 
       const accordionRow = isExpanded
         ? `<tr class="bg-slate-950/90 border-b border-teal-800/60">
-            <td colspan="13" class="p-4">
-              ${buildInlineAccordionHtml(targetKey, v.va, matchedTab ? matchedTab.tab : null)}
+            <td colspan="${visibleColSpan}" class="p-2">
+              <div class="kitsune-sticky-drawer sticky left-2 box-border">
+                ${buildInlineAccordionHtml(targetKey, v.va, matchedTab ? matchedTab.tab : null)}
+              </div>
             </td>
           </tr>`
         : "";
@@ -258,41 +404,42 @@ function renderDashboard() {
                 ${escapeHtml(v.va)}
               </a>
               ${isProb ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono">PROB</span>' : ""}
-              <span class="w-2 h-2 rounded-full ${hasSodSent && hasEodSent ? "bg-emerald-400" : hasSodSent ? "bg-amber-400" : "bg-slate-600"}" title="Report Status Indicator"></span>
             </div>
 
-            <!-- Floating Hover Card for Reports -->
-            <div class="hidden group-hover:block absolute left-0 bottom-full mb-2 z-55 w-60 bg-slate-950/95 backdrop-blur-md border border-teal-700/70 rounded-xl p-3 shadow-2xl pointer-events-none space-y-1.5 text-left whitespace-normal">
+            <!-- Floating Hover Card with Current Date Activity Rate -->
+            <div class="hidden group-hover:block absolute left-0 bottom-full mb-2 z-55 w-64 bg-slate-950/95 backdrop-blur-md border border-teal-700/70 rounded-xl p-3 shadow-2xl pointer-events-none space-y-1.5 text-left whitespace-normal">
               <div class="flex items-center justify-between border-b border-slate-800 pb-1">
-                <span class="text-[10px] font-bold uppercase tracking-wider text-teal-300">${escapeHtml(v.va)} • Report Status</span>
-                <span class="text-[9px] font-mono text-slate-400">${escapeHtml(shiftDateVal)}</span>
+                <span class="text-[10px] font-bold uppercase tracking-wider text-teal-300">${escapeHtml(v.va)}</span>
+                <span class="text-[9px] font-mono text-slate-400">${escapeHtml(todayWorkSession ? todayWorkSession.date : shiftDateVal)}</span>
               </div>
               <div class="text-[11px] flex items-center justify-between text-slate-200 pt-0.5">
-                <span>☀️ SOD SOW:</span>
-                <strong class="${hasSodSent ? "text-emerald-400" : "text-slate-500"}">${hasSodSent ? "Sent" : "Not sent yet"}</strong>
+                <span>⚡ Today Activity:</span>
+                <span>${currentDateActBadge}</span>
               </div>
               <div class="text-[11px] flex items-center justify-between text-slate-200">
-                <span>🌙 EOD Audit:</span>
-                <strong class="${hasEodSent ? "text-emerald-400" : "text-slate-500"}">${hasEodSent ? "Sent" : "Not sent yet"}</strong>
+                <span>⏱️ Tracked Today:</span>
+                <strong class="font-mono text-teal-300">${escapeHtml(currentDateTracked)}</strong>
               </div>
             </div>
           </td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${schedPillHtml}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${statusBadge}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.daysWorked || "-")}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.avgHrsPerDay || "-")}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.lateClockIns || "0")}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.earlyLogOutsShortDays || "0")}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${formatConditionalActivityBadge(v.avgActivity)}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.flagDays || "0")}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.flagDays30d || "0")}</td>
-          <td class="px-3 py-2.5 text-center whitespace-nowrap">${escapeHtml(v.tlFlagsYellowRed || "-")}</td>
-          <td class="px-3 py-2.5 text-left whitespace-nowrap">${formatCoachingFocusBadge(v.coachingFocus)}</td>
+          <td class="${colCls("schedule", "px-3 py-2.5 text-center whitespace-nowrap")}">${schedPillHtml}</td>
+          <td class="${colCls("status", "px-3 py-2.5 text-center whitespace-nowrap")}">${statusBadge}</td>
+          <td class="${colCls("days", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.daysWorked || "-")}</td>
+          <td class="${colCls("avgHrs", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.avgHrsPerDay || "-")}</td>
+          <td class="${colCls("late", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.lateClockIns || "0")}</td>
+          <td class="${colCls("earlyShort", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.earlyLogOutsShortDays || "0")}</td>
+          <td class="${colCls("activity", "px-3 py-2.5 text-center whitespace-nowrap")}">${formatConditionalActivityBadge(v.avgActivity)}</td>
+          <td class="${colCls("flagDays", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.flagDays || "0")}</td>
+          <td class="${colCls("flags30d", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.flagDays30d || "0")}</td>
+          <td class="${colCls("tlFlags", "px-3 py-2.5 text-center whitespace-nowrap")}">${escapeHtml(v.tlFlagsYellowRed || "-")}</td>
+          <td class="${colCls("coaching", "px-3 py-2.5 text-left whitespace-nowrap")}">${formatCoachingFocusBadge(v.coachingFocus)}</td>
         </tr>
         ${accordionRow}
       `;
     })
     .join("");
+
+  requestAnimationFrame(syncStickyDrawerWidths);
 }
 
 function getOverviewDraftKey(tabKey) {
@@ -361,8 +508,8 @@ function updateOverviewSaveBtnUI(tabKey) {
     : "💾 Save Log Changes";
   btn.className =
     dirtyCount > 0
-      ? "px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-lg ring-2 ring-amber-400/50 transition cursor-pointer"
-      : "px-3.5 py-1.5 rounded-lg bg-teal-700/80 hover:bg-teal-600 text-white font-semibold text-xs border border-teal-600/60 transition cursor-pointer";
+      ? "px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-lg ring-2 ring-amber-400/50 transition cursor-pointer"
+      : "px-3 py-1.5 rounded-lg bg-teal-700/80 hover:bg-teal-600 text-white font-semibold text-xs border border-teal-600/60 transition cursor-pointer";
 }
 
 function getFlagSelectStyle(val) {
@@ -383,7 +530,7 @@ function resolveCurrentDateRow(rows) {
 
   let match = rows.find((r) => {
     const dStr = String(r.Date || r.Week || Object.values(r)[0] || "").trim();
-    return dStr.toLowerCase().includes("nov 17") || dStr === formattedToday;
+    return dStr === formattedToday;
   });
   if (match) return { row: match, label: "Today's Shift" };
 
@@ -437,7 +584,7 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
   const flagKey = flagIdx !== -1 ? cleanHeaders[flagIdx] : "";
   const flagCol = flagIdx !== -1 ? colIndices[flagIdx] : 0;
 
-  let rowHtml = `<p class="text-xs text-slate-500 p-2">No shift log rows found.</p>`;
+  let shiftCardHtml = `<p class="text-xs text-slate-500 p-2">No shift log rows found.</p>`;
 
   if (row) {
     const rDraft = overviewLogDrafts[getOverviewRowDraftKey(tabKey, row._sheetRow)] || {};
@@ -467,99 +614,92 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
 
     const effectiveNote = rDraft.notesDirty ? rDraft.notesVal : serverNote;
     const effectiveFlag = rDraft.flagDirty ? rDraft.flagVal : serverFlag;
-
     const upperFlag = String(effectiveFlag).trim().toUpperCase();
-    const hasSod = effectiveNote.includes(TAG_START);
-    const hasEod = effectiveNote.includes(TAG_END);
 
     const amKey = `${tabKey}_row_${row._sheetRow}`;
     const effectiveAm = rDraft.amDirty ? rDraft.amVal : siteAmComms[amKey] || "";
     const isAmOpen = Boolean(expandedAmRows[amKey]);
 
-    rowHtml = `
-      <tr class="border-t border-slate-800 ${isDirty ? "bg-amber-950/15" : ""}">
-        <td class="p-2.5 font-mono text-xs text-slate-200 whitespace-nowrap align-top">${escapeHtml(dateVal)}</td>
-        <td class="p-2.5 font-mono text-xs text-slate-300 whitespace-nowrap align-top">${escapeHtml(inVal)} – ${escapeHtml(outVal)}</td>
-        <td class="p-2.5 font-mono text-xs text-teal-300 whitespace-nowrap align-top">${escapeHtml(hrsVal)}</td>
-        <td class="p-2 min-w-[340px] align-top space-y-1.5">
-          ${
-            notesCol
-              ? `<textarea id="ov-note-box-${row._sheetRow}" rows="2"
-                           oninput="window.stageOvNoteEdit('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${notesCol}, this.value)"
-                           placeholder="Add TL note..."
-                           class="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border ${
-                             rDraft.notesDirty ? "border-amber-500/80" : "border-slate-700"
-                           } text-xs text-slate-100 focus:border-teal-500 focus:outline-none">${escapeHtml(effectiveNote)}</textarea>
+    shiftCardHtml = `
+      <div class="bg-slate-950 border ${isDirty ? "border-amber-500/60" : "border-slate-800"} rounded-xl p-3 space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2 text-xs">
+          <div class="flex flex-wrap items-center gap-3 font-mono">
+            <div>
+              <span class="text-[10px] text-slate-500 uppercase font-sans block">Date</span>
+              <span class="text-slate-200 font-semibold">${escapeHtml(dateVal)}</span>
+            </div>
+            <div>
+              <span class="text-[10px] text-slate-500 uppercase font-sans block">Shift</span>
+              <span class="text-slate-300">${escapeHtml(inVal)} – ${escapeHtml(outVal)}</span>
+            </div>
+            <div>
+              <span class="text-[10px] text-slate-500 uppercase font-sans block">Hours</span>
+              <span class="text-teal-300 font-bold">${escapeHtml(hrsVal)}</span>
+            </div>
+          </div>
 
-                 <div class="flex flex-wrap items-center justify-between gap-1.5">
-                   <button type="button" onclick="window.toggleOvAmRow('${amKey}')"
-                           class="text-[10px] font-bold px-2 py-0.5 rounded border cursor-pointer ${
-                             effectiveAm.trim()
-                               ? "bg-rose-950 text-rose-300 border-rose-800"
-                               : "bg-slate-900 text-slate-400 border-slate-700 hover:text-rose-300"
-                           }">
-                     🚩 ${isAmOpen ? "Hide Comms" : effectiveAm.trim() ? "AM Comms (Logged)" : "+ AM Comms"}
-                   </button>
-
-                   <div class="flex items-center gap-1.5">
-                     <button id="ov-sod-btn-${row._sheetRow}" type="button"
-                             onclick="window.toggleOvRowTag('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${notesCol}, '${TAG_START}')"
-                             class="py-0.5 px-2 rounded text-[10px] font-bold border cursor-pointer ${
-                               hasSod
-                                 ? "bg-emerald-950 text-emerald-300 border-emerald-600"
-                                 : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"
-                             }">
-                       ☀️ ${hasSod ? "✓ SOD" : "+ SOD"}
-                     </button>
-                     <button id="ov-eod-btn-${row._sheetRow}" type="button"
-                             onclick="window.toggleOvRowTag('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${notesCol}, '${TAG_END}')"
-                             class="py-0.5 px-2 rounded text-[10px] font-bold border cursor-pointer ${
-                               hasEod
-                                 ? "bg-indigo-950 text-indigo-300 border-indigo-600"
-                                 : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"
-                             }">
-                       🌙 ${hasEod ? "✓ EOD" : "+ EOD"}
-                     </button>
-                   </div>
-                 </div>
-
-                 ${
-                   isAmOpen
-                     ? `<div class="bg-rose-950/25 border border-rose-900/60 rounded-lg p-2 space-y-1">
-                         <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Site-Only)</div>
-                         <textarea rows="2"
-                                   oninput="window.stageOvAmEdit('${safeTabKey}', ${row._sheetRow}, '${amKey}', this.value)"
-                                   placeholder="Log client escalations or AM follow-ups..."
-                                   class="w-full bg-slate-950 border border-rose-900/70 rounded p-1.5 text-xs text-rose-100">${escapeHtml(effectiveAm)}</textarea>
-                       </div>`
-                     : ""
-                 }`
-              : ""
-          }
-        </td>
-        <td class="p-2 align-top">
           ${
             flagCol
-              ? `<select onchange="window.stageOvFlagEdit('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${flagCol}, this.value, this)"
-                         class="px-2 py-1.5 rounded border text-xs ${getFlagSelectStyle(effectiveFlag)}">
-                  <option value="" ${upperFlag === "" ? "selected" : ""}>-</option>
-                  <option value="Green" ${upperFlag === "GREEN" ? "selected" : ""}>Green</option>
-                  <option value="Yellow" ${upperFlag === "YELLOW" ? "selected" : ""}>Yellow</option>
-                  <option value="Red" ${upperFlag === "RED" ? "selected" : ""}>Red</option>
-                  <option value="RL" ${upperFlag === "RL" ? "selected" : ""}>RL</option>
-                  <option value="EL" ${upperFlag === "EL" ? "selected" : ""}>EL</option>
-                </select>`
+              ? `<div class="flex items-center gap-2">
+                  <span class="text-[10px] font-bold uppercase text-slate-400">Flag:</span>
+                  <select onchange="window.stageOvFlagEdit('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${flagCol}, this.value, this)"
+                          class="px-2.5 py-1 rounded border text-xs cursor-pointer ${getFlagSelectStyle(effectiveFlag)}">
+                    <option value="" ${upperFlag === "" ? "selected" : ""}>-</option>
+                    <option value="Green" ${upperFlag === "GREEN" ? "selected" : ""}>Green</option>
+                    <option value="Yellow" ${upperFlag === "YELLOW" ? "selected" : ""}>Yellow</option>
+                    <option value="Red" ${upperFlag === "RED" ? "selected" : ""}>Red</option>
+                    <option value="RL" ${upperFlag === "RL" ? "selected" : ""}>RL</option>
+                    <option value="EL" ${upperFlag === "EL" ? "selected" : ""}>EL</option>
+                  </select>
+                </div>`
               : ""
           }
-        </td>
-      </tr>
+        </div>
+
+        ${
+          notesCol
+            ? `<div class="space-y-2">
+                <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Notes & Tags</label>
+                <textarea id="ov-note-box-${row._sheetRow}" rows="2"
+                          oninput="window.stageOvNoteEdit('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${notesCol}, this.value)"
+                          placeholder="Add TL note..."
+                          class="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border ${
+                            rDraft.notesDirty ? "border-amber-500/80" : "border-slate-700"
+                          } text-xs text-slate-100 focus:border-teal-500 focus:outline-none">${escapeHtml(effectiveNote)}</textarea>
+
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <button type="button" onclick="window.toggleOvAmRow('${amKey}')"
+                          class="text-[10px] font-bold px-2 py-0.5 rounded border cursor-pointer ${
+                            effectiveAm.trim()
+                              ? "bg-rose-950 text-rose-300 border-rose-800"
+                              : "bg-slate-900 text-slate-400 border-slate-700 hover:text-rose-300"
+                          }">
+                    🚩 ${isAmOpen ? "Hide Comms" : effectiveAm.trim() ? "AM Comms (Logged)" : "+ AM Comms"}
+                  </button>
+                </div>
+
+                ${
+                  isAmOpen
+                    ? `<div class="bg-rose-950/25 border border-rose-900/60 rounded-lg p-2 space-y-1">
+                        <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Site-Only)</div>
+                        <textarea rows="2"
+                                  oninput="window.stageOvAmEdit('${safeTabKey}', ${row._sheetRow}, '${amKey}', this.value)"
+                                  placeholder="Log client escalations or AM follow-ups..."
+                                  class="w-full bg-slate-950 border border-rose-900/70 rounded p-1.5 text-xs text-rose-100">${escapeHtml(effectiveAm)}</textarea>
+                      </div>`
+                    : ""
+                }
+              </div>`
+            : ""
+        }
+      </div>
     `;
   }
 
   const focusInputsHtml = bucket.focuses
     .map(
       (f, idx) => `
-      <div class="bg-slate-900 border border-slate-800 rounded-lg p-2.5 space-y-1.5">
+      <div class="bg-slate-900 border border-slate-800 rounded-lg p-2.5 space-y-1.5 min-w-0">
         <label class="flex items-center gap-2 text-xs font-semibold text-slate-200 cursor-pointer">
           <input type="checkbox" ${f.achieved ? "checked" : ""}
                  onchange="window.updateOvGoalItem('${safeTabKey}', ${idx}, 'achieved', this.checked)"
@@ -580,25 +720,25 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
     .join("");
 
   return `
-    <div class="bg-slate-900 border border-teal-800/70 rounded-xl p-4 space-y-4">
-      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
-        <div class="flex flex-wrap items-center gap-2.5">
+    <div class="bg-slate-900 border border-teal-800/70 rounded-xl p-3 sm:p-4 space-y-3.5 w-full box-border">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+        <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-bold text-white uppercase tracking-wider">Quick Align & Logs: <strong class="text-teal-300">${escapeHtml(vaName)}</strong></span>
           <a href="va-detail.html#tab=${encodeURIComponent(tabKey)}&name=${encodeURIComponent(vaName)}"
              class="text-xs text-blue-400 hover:text-blue-300 underline">Open Full Dossier ↗</a>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <button type="button" onclick="window.toggleAccordionGoals()"
                   class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-blue-300 cursor-pointer">
-            ${isAccordionGoalsOpen ? "▲ Hide SOW Alignment" : "🎯 Weekly SOW Alignment"}
+            ${isAccordionGoalsOpen ? "▲ Hide SOW Alignment" : isProb ? "🎯 Daily Task Alignment" : "🎯 Weekly SOW Alignment"}
           </button>
           <button id="overview-save-logs-btn-${escapeHtml(tabKey)}" type="button"
                   onclick="window.saveAllOverviewLogDrafts('${safeTabKey}')"
                   class="${
                     dirtyCount > 0
-                      ? "px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-lg ring-2 ring-amber-400/50 transition cursor-pointer"
-                      : "px-3.5 py-1.5 rounded-lg bg-teal-700/80 hover:bg-teal-600 text-white font-semibold text-xs border border-teal-600/60 transition cursor-pointer"
+                      ? "px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-lg ring-2 ring-amber-400/50 transition cursor-pointer"
+                      : "px-3 py-1.5 rounded-lg bg-teal-700/80 hover:bg-teal-600 text-white font-semibold text-xs border border-teal-600/60 transition cursor-pointer"
                   }">
             ${dirtyCount > 0 ? `💾 Save Log Changes (${dirtyCount})` : "💾 Save Log Changes"}
           </button>
@@ -607,8 +747,8 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
 
       ${
         isAccordionGoalsOpen
-          ? `<div class="bg-slate-950 border ${hasSowUnsaved ? "border-amber-600/70" : "border-slate-800"} rounded-xl p-3.5 space-y-3">
-              <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          ? `<div class="bg-slate-950 border ${hasSowUnsaved ? "border-amber-600/70" : "border-slate-800"} rounded-xl p-3 space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
                 <span class="text-xs font-bold text-blue-300 uppercase">${isProb ? "📋 Daily Task Milestones" : "🎯 Weekly SOW Focuses"}</span>
                 <button type="button" onclick="window.saveOvSowDraft('${safeTabKey}')"
                         class="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs cursor-pointer shadow">
@@ -634,24 +774,11 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
           : ""
       }
 
-      <div class="space-y-1">
-        <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-          <span>📅 Today's Shift Log Entry (${escapeHtml(resolved ? resolved.label : "Current")})</span>
+      <div class="space-y-1.5">
+        <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+          📅 Today's Shift Log Entry (${escapeHtml(resolved ? resolved.label : "Current")})
         </div>
-        <div class="overflow-x-auto border border-slate-800 rounded-xl">
-          <table class="w-full text-left border-collapse">
-            <thead class="bg-slate-950 text-[10px] uppercase text-slate-400">
-              <tr>
-                <th class="p-2.5">Date</th>
-                <th class="p-2.5">Shift</th>
-                <th class="p-2.5">Hours</th>
-                <th class="p-2.5">Notes & Tags</th>
-                <th class="p-2.5">Flag</th>
-              </tr>
-            </thead>
-            <tbody>${rowHtml}</tbody>
-          </table>
-        </div>
+        ${shiftCardHtml}
       </div>
     </div>
   `;
@@ -763,7 +890,7 @@ window.stageOvFlagEdit = (tabKey, tabName, sheetRow, colIndex, val, selectEl) =>
     flagDirty: true
   });
   if (selectEl) {
-    selectEl.className = `px-2 py-1.5 rounded border text-xs ${getFlagSelectStyle(val)}`;
+    selectEl.className = `px-2.5 py-1 rounded border text-xs cursor-pointer ${getFlagSelectStyle(val)}`;
   }
 };
 
@@ -778,46 +905,6 @@ window.stageOvAmEdit = (tabKey, sheetRow, amKey, val) => {
 window.toggleOvAmRow = (amKey) => {
   expandedAmRows[amKey] = !expandedAmRows[amKey];
   renderDashboard();
-};
-
-window.toggleOvRowTag = (tabKey, tabName, sheetRow, colIndex, tag) => {
-  const box = document.getElementById(`ov-note-box-${sheetRow}`);
-  if (!box) return;
-  let text = box.value || "";
-  if (text.includes(tag)) {
-    text = text.replace(tag, "").replace(/^\s*[\r\n]+/, "").trim();
-  } else {
-    text = text.trim() ? `${tag}\n${text.trim()}` : tag;
-  }
-  box.value = text;
-
-  stageOverviewRowDraft(tabKey, sheetRow, {
-    tabName,
-    notesCol: colIndex,
-    notesVal: text,
-    notesDirty: true
-  });
-
-  const sodBtn = document.getElementById(`ov-sod-btn-${sheetRow}`);
-  const eodBtn = document.getElementById(`ov-eod-btn-${sheetRow}`);
-  if (sodBtn) {
-    const hasSod = text.includes(TAG_START);
-    sodBtn.className = `py-0.5 px-2 rounded text-[10px] font-bold border cursor-pointer ${
-      hasSod
-        ? "bg-emerald-950 text-emerald-300 border-emerald-600"
-        : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"
-    }`;
-    sodBtn.textContent = `☀️ ${hasSod ? "✓ SOD" : "+ SOD"}`;
-  }
-  if (eodBtn) {
-    const hasEod = text.includes(TAG_END);
-    eodBtn.className = `py-0.5 px-2 rounded text-[10px] font-bold border cursor-pointer ${
-      hasEod
-        ? "bg-indigo-950 text-indigo-300 border-indigo-600"
-        : "bg-slate-900 text-slate-400 border-slate-700 hover:text-white"
-    }`;
-    eodBtn.textContent = `🌙 ${hasEod ? "✓ EOD" : "+ EOD"}`;
-  }
 };
 
 window.saveAllOverviewLogDrafts = async (tabKey) => {
@@ -839,7 +926,6 @@ window.saveAllOverviewLogDrafts = async (tabKey) => {
     const updatePromises = dirtyEntries.map(async (entry) => {
       const promises = [];
 
-      // Optimistically update in-memory overview tabObj.rows so the accordion reflects instantly
       if (tabObj && Array.isArray(tabObj.rows)) {
         const targetRow = tabObj.rows.find((r) => r._sheetRow === entry.sheetRow);
         if (targetRow) {

@@ -9,11 +9,9 @@ import {
 
 renderTopNav("va-detail");
 
-const TAG_START = "[SOD/SOW Sent]";
-const TAG_END = "[EOD/EOW Sent]";
-
 let selectedTabData = {};
 let allVas = {};
+let hubstaffLiveRows = [];
 let siteProfiles = {};
 let siteGoals = {};
 let siteAmComms = {};
@@ -21,6 +19,7 @@ let activeWeekKey = "week_1";
 let isSowDrawerOpen = false;
 let isDossierEditing = false;
 let expandedAmRows = {};
+let expandedDateAlignRows = {};
 
 let sowDrafts = {};
 let sowDirty = {};
@@ -83,6 +82,12 @@ subscribeCached("kitsuneDashboard", "kitsune_full_detail_cache", (data) => {
 
   selectedTabData = incomingTabs;
   allVas = data.vas || {};
+
+  const liveData = data.hubstaffLive || {};
+  hubstaffLiveRows = Array.isArray(liveData.rows)
+    ? liveData.rows
+    : Object.values(liveData.rows || {});
+
   const siteData = data.siteData || {};
   siteProfiles = siteData.vaProfiles || {};
   siteGoals = siteData.vaGoals || {};
@@ -175,6 +180,7 @@ window.selectVaTabPill = (key) => {
   activeKey = key;
   isDossierEditing = false;
   isSowDrawerOpen = false;
+  expandedDateAlignRows = {};
   const tabObj = selectedTabData[activeKey];
   const nameQuery = tabObj ? `&name=${encodeURIComponent(tabObj.fullName || tabObj.tabName)}` : "";
   window.history.replaceState({}, "", `#tab=${encodeURIComponent(activeKey)}${nameQuery}`);
@@ -238,21 +244,45 @@ function showToast(msg) {
   setTimeout(() => toast.classList.add("hidden"), 3500);
 }
 
+/**
+ * Recalibrated Row 2 Cell Parser:
+ * - A2 (index 0): Shift Type
+ * - B2 (index 1): Start Time
+ * - C2 (index 2): End Time
+ * - G2 (index 6): Account Brief URL
+ */
 function parseScheduleFields(tabObj) {
-  const raw = (tabObj.scheduleRow || [])
+  const row2 = Array.isArray(tabObj.scheduleRow) ? tabObj.scheduleRow : [];
+  const a2 = String(row2[0] || "").trim();
+  const b2 = String(row2[1] || "").trim();
+  const c2 = String(row2[2] || "").trim();
+  const g2 = String(row2[6] || "").trim();
+
+  const briefUrl = tabObj.briefUrl || (g2.toLowerCase().startsWith("http") ? g2 : "");
+  const isTimeStr = (v) => /^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(v);
+
+  if (isTimeStr(b2) || isTimeStr(c2)) {
+    return {
+      shiftType: a2 && !a2.toLowerCase().startsWith("shift schedule") ? a2 : "Full Time",
+      startTime: b2.toUpperCase().replace(/\s+/g, ""),
+      endTime: c2.toUpperCase().replace(/\s+/g, ""),
+      briefUrl
+    };
+  }
+
+  const cleaned = row2
     .map((v) => String(v || "").trim())
     .filter((v) => v && !v.toLowerCase().includes("brief") && !v.toLowerCase().startsWith("shift schedule"));
 
   let shiftType = "";
   const times = [];
 
-  raw.forEach((item) => {
-    // Handle combined ranges like "6:00AM - 2:00PM" in a single cell
+  cleaned.forEach((item) => {
     const rangeMatch = item.match(/^(\d{1,2}:\d{2}\s*(?:AM|PM)?)\s*[-–to]+\s*(\d{1,2}:\d{2}\s*(?:AM|PM)?)$/i);
     if (rangeMatch) {
       times.push(rangeMatch[1].toUpperCase().replace(/\s+/g, ""));
       times.push(rangeMatch[2].toUpperCase().replace(/\s+/g, ""));
-    } else if (/^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(item)) {
+    } else if (isTimeStr(item)) {
       times.push(item.toUpperCase().replace(/\s+/g, ""));
     } else if (!shiftType) {
       shiftType = item;
@@ -263,7 +293,7 @@ function parseScheduleFields(tabObj) {
     shiftType,
     startTime: times[0] || "",
     endTime: times[1] || "",
-    briefUrl: tabObj.briefUrl || ""
+    briefUrl
   };
 }
 
@@ -313,6 +343,31 @@ function resolveFullVaName(tabObj) {
   return (matchedVa && matchedVa.va) || tabObj.tabName;
 }
 
+function findHubstaffSessionForDate(tabObj, rowDateStr) {
+  if (!hubstaffLiveRows.length || !tabObj) return null;
+  const isoDate = parseRowDateToIso(rowDateStr);
+  if (!isoDate) return null;
+
+  const clean = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const fullName = clean(resolveFullVaName(tabObj));
+  const tabName = clean(tabObj.tabName);
+  const firstTwo = fullName.split(" ").slice(0, 2).join(" ");
+
+  return (
+    hubstaffLiveRows.find((r) => {
+      const rIso = r.dateIso || parseRowDateToIso(r.date);
+      if (rIso !== isoDate) return false;
+      const m = clean(r.member);
+      return (
+        m === fullName ||
+        m === tabName ||
+        (firstTwo && m.startsWith(firstTwo)) ||
+        (tabName && m.startsWith(tabName))
+      );
+    }) || null
+  );
+}
+
 document.getElementById("save-schedule-btn").addEventListener("click", async () => {
   const tabObj = selectedTabData[activeKey];
   if (!tabObj) return;
@@ -322,18 +377,23 @@ document.getElementById("save-schedule-btn").addEventListener("click", async () 
   const endTime = document.getElementById("edit-end-time").value.trim();
   const briefUrl = document.getElementById("edit-brief-url").value.trim();
 
-  // Optimistically lock the new schedule values in local memory so End Time does not revert
-  const updatedScheduleRow = [shiftType, startTime, endTime].filter(Boolean);
-  tabObj.scheduleRow = updatedScheduleRow;
+  const existingRow2 = Array.isArray(tabObj.scheduleRow) ? [...tabObj.scheduleRow] : [];
+  while (existingRow2.length < 7) existingRow2.push("");
+  existingRow2[0] = shiftType;
+  existingRow2[1] = startTime;
+  existingRow2[2] = endTime;
+  existingRow2[6] = briefUrl ? "Account Brief" : "";
+
+  tabObj.scheduleRow = existingRow2;
   tabObj.briefUrl = briefUrl;
   pendingScheduleLock[activeKey] = {
     timestamp: Date.now(),
-    scheduleRow: updatedScheduleRow,
+    scheduleRow: existingRow2,
     briefUrl
   };
 
   renderDossierCard();
-  showToast(`Saving schedule & Account Brief to ${tabObj.tabName} in Google Sheets...`);
+  showToast(`Saving schedule (B2/C2) & Account Brief (G2) to ${tabObj.tabName}...`);
 
   await updateScheduleMeta({
     tabName: tabObj.tabName,
@@ -341,10 +401,10 @@ document.getElementById("save-schedule-btn").addEventListener("click", async () 
     startTime,
     endTime,
     briefUrl,
-    metaCols: tabObj.metaCols
+    metaCols: { shiftTypeCol: 1, startTimeCol: 2, endTimeCol: 3, briefCol: 7 }
   });
 
-  showToast(`✓ Saved Row 2 schedule (${startTime} – ${endTime}) to ${tabObj.tabName}!`);
+  showToast(`✓ Saved B2 (${startTime}), C2 (${endTime}) & G2 Brief to ${tabObj.tabName}!`);
 });
 
 window.autoResizeNote = (el) => {
@@ -411,7 +471,7 @@ function renderDossierCard() {
             <p class="font-semibold text-slate-200 mt-0.5">${escapeHtml(sched.shiftType || "Full Time")}</p>
           </div>
           <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Shift Hours</span>
+            <span class="text-slate-500 block text-[10px]">Shift Hours (B2–C2)</span>
             <p class="font-semibold text-slate-200 mt-0.5 font-mono whitespace-nowrap">${escapeHtml(shiftRange)}</p>
           </div>
           <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
@@ -446,7 +506,7 @@ function renderDossierCard() {
               <span class="text-xs font-bold text-slate-200 uppercase tracking-wide">💼 Client & Assignment Dossier</span>
               ${profile.role ? `<span class="bg-blue-950 text-blue-300 border border-blue-800 px-2 py-0.5 rounded text-[10px] font-semibold">${escapeHtml(profile.role)}</span>` : ""}
             </div>
-            ${sched.briefUrl ? `<a href="${escapeHtml(sched.briefUrl)}" target="_blank" rel="noreferrer" class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">Open Brief Document ↗</a>` : ""}
+            ${sched.briefUrl ? `<a href="${escapeHtml(sched.briefUrl)}" target="_blank" rel="noreferrer" class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">Open Brief Document (G2) ↗</a>` : ""}
           </div>
 
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs pt-0.5">
@@ -626,30 +686,12 @@ function ensureLocalDraft() {
   return sowDrafts[dKey];
 }
 
-function renderSowAlignment() {
-  const section = document.getElementById("sow-alignment-section");
-  const toggleBtn = document.getElementById("toggle-sow-drawer-btn");
+function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" } = {}) {
   const tabObj = selectedTabData[activeKey];
+  if (!tabObj) return "";
 
-  if (!tabObj) {
-    section.classList.add("hidden");
-    toggleBtn.classList.add("hidden");
-    return;
-  }
-
-  toggleBtn.classList.remove("hidden");
   const profile = siteProfiles[activeKey] || {};
   const isProb = profile.employmentTier === "prob";
-  toggleBtn.textContent = isSowDrawerOpen
-    ? `▲ Hide ${isProb ? "Daily Tasks" : "Weekly SOW"}`
-    : `🎯 ${isProb ? "Daily Task Alignment" : "Weekly SOW Alignment"}`;
-
-  if (!isSowDrawerOpen) {
-    section.classList.add("hidden");
-    return;
-  }
-
-  section.classList.remove("hidden");
   const fullName = resolveFullVaName(tabObj);
   const bucket = getGoalBucket();
   const itemLabel = isProb ? "Task" : "Focus";
@@ -659,7 +701,7 @@ function renderSowAlignment() {
   const itemsHtml = bucket.focuses
     .map(
       (f, idx) => `
-      <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
+      <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2 min-w-0">
         <div class="flex items-center justify-between">
           <label class="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" ${f.achieved ? "checked" : ""}
@@ -687,16 +729,23 @@ function renderSowAlignment() {
     )
     .join("");
 
-  section.innerHTML = `
-    <div class="bg-slate-900 border ${hasUnsaved ? "border-amber-600/70" : "border-slate-800"} rounded-2xl p-5 shadow-2xl space-y-4">
+  const rowArg = targetSheetRow !== null ? targetSheetRow : "null";
+  const closeHandler =
+    targetSheetRow !== null
+      ? `window.toggleDateAlignRow(${targetSheetRow})`
+      : `window.toggleSowDrawer()`;
+
+  return `
+    <div class="bg-slate-900 border ${hasUnsaved ? "border-amber-600/70" : "border-blue-900/70"} rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4 w-full max-w-full box-border">
       <div class="flex flex-wrap items-center justify-between border-b border-slate-800 pb-3 gap-2">
         <div class="flex flex-wrap items-center gap-2.5">
           <span class="text-base">${isProb ? "⏳" : "🎯"}</span>
           <span class="text-xs font-bold text-white uppercase tracking-wider">
             ${isProb ? "DAILY TASK ALIGNMENT" : "WEEKLY SOW ALIGNMENT"}:
-            <strong class="text-blue-400">${escapeHtml(tabObj.tabName.toUpperCase())}</strong> (${escapeHtml(fullName.toUpperCase())})
+            <strong class="text-blue-400">${escapeHtml(tabObj.tabName.toUpperCase())}</strong>
+            ${targetDateLabel ? `<span class="text-teal-300 font-mono ml-1">• ${escapeHtml(targetDateLabel)}</span>` : `(${escapeHtml(fullName.toUpperCase())})`}
           </span>
-          <span id="sow-status-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+          <span class="sow-status-badge text-[10px] font-mono px-2 py-0.5 rounded-full border ${
             hasUnsaved
               ? "text-amber-300 bg-amber-950/70 border-amber-700"
               : "text-emerald-400 bg-emerald-950/60 border-emerald-800"
@@ -712,7 +761,7 @@ function renderSowAlignment() {
                   } rounded-lg shadow cursor-pointer">
             💾 Save SOW
           </button>
-          <button type="button" onclick="window.toggleSowDrawer()"
+          <button type="button" onclick="${closeHandler}"
                   class="px-3 py-1.5 text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer">
             Collapse
           </button>
@@ -730,7 +779,7 @@ function renderSowAlignment() {
         </div>
       </div>
 
-      <div class="space-y-2.5">${itemsHtml}</div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2.5">${itemsHtml}</div>
 
       <div>
         <button type="button" onclick="window.addGoalItem()"
@@ -741,35 +790,61 @@ function renderSowAlignment() {
 
       <div class="pt-2 border-t border-slate-800/80 space-y-1.5">
         <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">📝 ADDITIONAL NOTES:</label>
-        <textarea rows="3"
+        <textarea rows="2"
                   oninput="window.updateGoalAdditionalNotes(this.value, true)"
                   placeholder="Enter additional weekly context, client targets, or review notes..."
                   class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono leading-relaxed">${escapeHtml(bucket.additionalNotes)}</textarea>
       </div>
 
       <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-        <button type="button" onclick="window.appendGoalsToSheet('sod')"
+        <button type="button" onclick="window.appendGoalsToSheet('sod', ${rowArg})"
                 class="bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow flex items-center gap-1.5 cursor-pointer">
-          <span>☀️ Append SOW (SOD) to Note Draft</span>
+          <span>☀️ Append SOW (SOD) to ${targetDateLabel ? `${escapeHtml(targetDateLabel)} Note` : "Note Draft"}</span>
         </button>
 
-        <button type="button" onclick="window.appendGoalsToSheet('eod')"
+        <button type="button" onclick="window.appendGoalsToSheet('eod', ${rowArg})"
                 class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow flex items-center gap-1.5 cursor-pointer">
-          <span>🌙 Append Audit (EOD) to Note Draft</span>
+          <span>🌙 Append Audit (EOD) to ${targetDateLabel ? `${escapeHtml(targetDateLabel)} Note` : "Note Draft"}</span>
         </button>
       </div>
     </div>
   `;
 }
 
+function renderSowAlignment() {
+  const section = document.getElementById("sow-alignment-section");
+  const toggleBtn = document.getElementById("toggle-sow-drawer-btn");
+  const tabObj = selectedTabData[activeKey];
+
+  if (!tabObj) {
+    section.classList.add("hidden");
+    toggleBtn.classList.add("hidden");
+    return;
+  }
+
+  toggleBtn.classList.remove("hidden");
+  const profile = siteProfiles[activeKey] || {};
+  const isProb = profile.employmentTier === "prob";
+  toggleBtn.textContent = isSowDrawerOpen
+    ? `▲ Hide ${isProb ? "Daily Tasks" : "Weekly SOW"}`
+    : `🎯 ${isProb ? "Daily Task Alignment" : "Weekly SOW Alignment"}`;
+
+  if (!isSowDrawerOpen) {
+    section.classList.add("hidden");
+    return;
+  }
+
+  section.classList.remove("hidden");
+  section.innerHTML = buildAlignmentDrawerHtml();
+}
+
 function markSowDirtyIndicator() {
   const dKey = getDraftKey(activeKey, activeWeekKey);
   sowDirty[dKey] = true;
-  const badge = document.getElementById("sow-status-badge");
-  if (badge) {
-    badge.className = "text-[10px] font-mono px-2 py-0.5 rounded-full border text-amber-300 bg-amber-950/70 border-amber-700";
+  document.querySelectorAll(".sow-status-badge").forEach((badge) => {
+    badge.className = "sow-status-badge text-[10px] font-mono px-2 py-0.5 rounded-full border text-amber-300 bg-amber-950/70 border-amber-700";
     badge.textContent = "● Unsaved draft changes";
-  }
+  });
 }
 
 window.toggleSowDrawer = () => {
@@ -777,16 +852,26 @@ window.toggleSowDrawer = () => {
   renderSowAlignment();
 };
 
+window.toggleDateAlignRow = (sheetRow) => {
+  const key = `${activeKey}__${sheetRow}`;
+  expandedDateAlignRows[key] = !expandedDateAlignRows[key];
+  renderActiveTab();
+};
+
 window.setSowWeek = (wk) => {
   activeWeekKey = wk;
   renderSowAlignment();
+  renderActiveTab();
 };
 
 window.updateGoalItem = (idx, field, val, skipRerender = false) => {
   const draft = ensureLocalDraft();
   draft.focuses[idx] = { ...draft.focuses[idx], [field]: val };
   markSowDirtyIndicator();
-  if (!skipRerender) renderSowAlignment();
+  if (!skipRerender) {
+    renderSowAlignment();
+    renderActiveTab();
+  }
 };
 
 window.addGoalItem = () => {
@@ -794,13 +879,17 @@ window.addGoalItem = () => {
   draft.focuses.push({ id: `f_${Date.now()}`, text: "", achieved: false, outcomeNotes: "" });
   markSowDirtyIndicator();
   renderSowAlignment();
+  renderActiveTab();
 };
 
 window.updateGoalAdditionalNotes = (val, skipRerender = false) => {
   const draft = ensureLocalDraft();
   draft.additionalNotes = val;
   markSowDirtyIndicator();
-  if (!skipRerender) renderSowAlignment();
+  if (!skipRerender) {
+    renderSowAlignment();
+    renderActiveTab();
+  }
 };
 
 window.saveSowDraft = async () => {
@@ -814,6 +903,7 @@ window.saveSowDraft = async () => {
   delete sowDirty[dKey];
   showToast(`✓ Saved SOW / Daily Tasks!`);
   renderSowAlignment();
+  renderActiveTab();
 };
 
 window.handleMultiPasteGoals = (e, startIdx) => {
@@ -833,10 +923,11 @@ window.handleMultiPasteGoals = (e, startIdx) => {
 
   markSowDirtyIndicator();
   renderSowAlignment();
+  renderActiveTab();
   showToast(`✓ Auto-split ${items.length} items — click Save SOW when ready!`);
 };
 
-window.appendGoalsToSheet = (mode) => {
+window.appendGoalsToSheet = (mode, specificSheetRow = null) => {
   const tabObj = selectedTabData[activeKey];
   if (!tabObj || !tabObj.rows || !tabObj.rows.length) return;
 
@@ -850,9 +941,10 @@ window.appendGoalsToSheet = (mode) => {
   const notesKey = tabObj.cleanHeaders[notesIdx];
   const notesCol = tabObj.colIndices[notesIdx];
 
-  const targetRow =
-    [...tabObj.rows].reverse().find((r) => String(r.Clock_in || r.Clock_In || "").trim()) ||
-    tabObj.rows[tabObj.rows.length - 1];
+  const targetRow = specificSheetRow
+    ? tabObj.rows.find((r) => r._sheetRow === specificSheetRow) || tabObj.rows[tabObj.rows.length - 1]
+    : [...tabObj.rows].reverse().find((r) => String(r.Clock_in || r.Clock_In || "").trim()) ||
+      tabObj.rows[tabObj.rows.length - 1];
 
   let block = "";
   if (mode === "sod") {
@@ -979,47 +1071,6 @@ window.stageAmCommsEdit = (sheetRow, amKey, value) => {
   });
 };
 
-window.toggleRowTag = (tabName, sheetRow, colIndex, tag) => {
-  const box = document.getElementById(`note-box-${sheetRow}`);
-  if (!box) return;
-  let text = box.value || "";
-  if (text.includes(tag)) {
-    text = text.replace(tag, "").replace(/^\s*[\r\n]+/, "").trim();
-  } else {
-    text = text.trim() ? `${tag}\n${text.trim()}` : tag;
-  }
-  box.value = text;
-  window.autoResizeNote(box);
-
-  stageRowDraft(activeKey, sheetRow, {
-    tabName,
-    notesCol: colIndex,
-    notesVal: text,
-    notesDirty: true
-  });
-
-  const sodBtn = document.getElementById(`sod-btn-${sheetRow}`);
-  const eodBtn = document.getElementById(`eod-btn-${sheetRow}`);
-  if (sodBtn) {
-    const hasSod = text.includes(TAG_START);
-    sodBtn.className = `py-0.5 px-2 rounded-md text-[10px] font-bold border transition cursor-pointer ${
-      hasSod
-        ? "bg-emerald-950/90 text-emerald-300 border-emerald-600"
-        : "bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200"
-    }`;
-    sodBtn.textContent = `☀️ ${hasSod ? "✓ SOD" : "+ SOD"}`;
-  }
-  if (eodBtn) {
-    const hasEod = text.includes(TAG_END);
-    eodBtn.className = `py-0.5 px-2 rounded-md text-[10px] font-bold border transition cursor-pointer ${
-      hasEod
-        ? "bg-indigo-950/90 text-indigo-300 border-indigo-600"
-        : "bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200"
-    }`;
-    eodBtn.textContent = `🌙 ${hasEod ? "✓ EOD" : "+ EOD"}`;
-  }
-};
-
 window.saveAllLogDrafts = async () => {
   const dirtyEntries = getActiveTabDirtyLogEntries();
   if (!dirtyEntries.length) {
@@ -1037,7 +1088,6 @@ window.saveAllLogDrafts = async () => {
     const updatePromises = dirtyEntries.map(async (entry) => {
       const promises = [];
 
-      // Optimistically update in-memory tabObj.rows so it reflects instantly
       if (tabObj && Array.isArray(tabObj.rows)) {
         const targetRow = tabObj.rows.find((r) => r._sheetRow === entry.sheetRow);
         if (targetRow) {
@@ -1112,20 +1162,31 @@ window.saveAllLogDrafts = async () => {
   }
 };
 
+function toLocalIsoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function parseRowDateToIso(rawStr) {
   const s = String(rawStr || "").trim();
   if (!s) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // Handle "12 Nov 26" or "18 Nov 2026"
+  const dmyMatch = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{2,4})$/);
+  if (dmyMatch) {
+    const day = dmyMatch[1];
+    const mon = dmyMatch[2];
+    const yr = dmyMatch[3].length === 2 ? `20${dmyMatch[3]}` : dmyMatch[3];
+    const parsedDmy = new Date(`${mon} ${day}, ${yr}`);
+    if (!isNaN(parsedDmy.getTime())) return toLocalIsoDate(parsedDmy);
+  }
 
   const hasYear = /\b20\d{2}\b/.test(s);
   const candidate = hasYear ? s : `${s}, ${new Date().getFullYear()}`;
   const d = new Date(candidate);
   if (isNaN(d.getTime())) return "";
 
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return toLocalIsoDate(d);
 }
 
 window.setLogDateRange = (fromVal, toVal) => {
@@ -1135,23 +1196,42 @@ window.setLogDateRange = (fromVal, toVal) => {
   renderActiveTab();
 };
 
-window.applyQuickDatePreset = (daysBack) => {
-  if (!daysBack) {
+window.applyQuickDatePreset = (preset) => {
+  if (!preset || preset === "all") {
     logDateFrom = "";
     logDateTo = "";
     persistGlobalDateRange();
     renderActiveTab();
     return;
   }
-  const end = new Date();
+
+  const today = new Date();
+  if (preset === "today") {
+    const iso = toLocalIsoDate(today);
+    logDateFrom = iso;
+    logDateTo = iso;
+    persistGlobalDateRange();
+    renderActiveTab();
+    return;
+  }
+
+  if (preset === "yesterday") {
+    const yest = new Date();
+    yest.setDate(today.getDate() - 1);
+    const iso = toLocalIsoDate(yest);
+    logDateFrom = iso;
+    logDateTo = iso;
+    persistGlobalDateRange();
+    renderActiveTab();
+    return;
+  }
+
+  const daysBack = Number(preset) || 7;
   const start = new Date();
-  start.setDate(end.getDate() - (daysBack - 1));
+  start.setDate(today.getDate() - (daysBack - 1));
 
-  const toIso = (d) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
-  logDateFrom = toIso(start);
-  logDateTo = toIso(end);
+  logDateFrom = toLocalIsoDate(start);
+  logDateTo = toLocalIsoDate(today);
   persistGlobalDateRange();
   renderActiveTab();
 };
@@ -1198,10 +1278,12 @@ function renderActiveTab() {
     openBriefLink.classList.add("hidden");
   }
 
+  const profile = siteProfiles[activeKey] || {};
+  const isProb = profile.employmentTier === "prob";
   const summaryVa = resolveSummaryVaRecord(tabObj);
   const liveStatus = (summaryVa && summaryVa.statusNow) || "Status unavailable";
   const isOnline = liveStatus.toLowerCase().includes("logged in");
-  const liveActivity = (summaryVa && summaryVa.avgActivity) || "—";
+  const liveActivity7d = (summaryVa && summaryVa.avgActivity) || "—";
   const liveAvgHrs = (summaryVa && summaryVa.avgHrsPerDay) || "—";
   const liveLate = (summaryVa && summaryVa.lateClockIns) || "0";
   const liveFocus = (summaryVa && summaryVa.coachingFocus) || "—";
@@ -1214,14 +1296,37 @@ function renderActiveTab() {
   const dateColIdx = headers.findIndex((h, idx) => idx === 0 || /week|date/i.test(h));
   const dateKey = dateColIdx !== -1 ? cleanHeaders[dateColIdx] : cleanHeaders[0];
 
-  const rows = allRows.filter((row) => {
-    if (!logDateFrom && !logDateTo) return true;
-    const iso = parseRowDateToIso(row[dateKey]);
-    if (!iso) return true;
-    if (logDateFrom && iso < logDateFrom) return false;
-    if (logDateTo && iso > logDateTo) return false;
-    return true;
-  });
+  const todayIso = toLocalIsoDate(new Date());
+  const yestDate = new Date();
+  yestDate.setDate(yestDate.getDate() - 1);
+  const yesterdayIso = toLocalIsoDate(yestDate);
+
+  const isTodaySelected = logDateFrom === todayIso && logDateTo === todayIso;
+  const isYesterdaySelected = logDateFrom === yesterdayIso && logDateTo === yesterdayIso;
+
+  // Filter by date range and sort newest date first (top = latest)
+  const rows = allRows
+    .filter((row) => {
+      if (!logDateFrom && !logDateTo) return true;
+      const iso = parseRowDateToIso(row[dateKey]);
+      if (!iso) return true;
+      if (logDateFrom && iso < logDateFrom) return false;
+      if (logDateTo && iso > logDateTo) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const isoA = parseRowDateToIso(a[dateKey]);
+      const isoB = parseRowDateToIso(b[dateKey]);
+      if (isoA && isoB && isoA !== isoB) {
+        return isoB.localeCompare(isoA);
+      }
+      return (Number(b._sheetRow) || 0) - (Number(a._sheetRow) || 0);
+    });
+
+  const presetBtnClass = (active) =>
+    active
+      ? "px-2 py-1 rounded-lg bg-teal-700 text-white font-semibold text-[11px] cursor-pointer"
+      : "px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer";
 
   const filterBarHtml = `
     <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-slate-900/95 border-b border-slate-800 text-xs">
@@ -1236,30 +1341,34 @@ function renderActiveTab() {
                class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-100 font-mono focus:border-teal-500 focus:outline-none" />
         ${
           logDateFrom || logDateTo
-            ? `<button type="button" onclick="window.applyQuickDatePreset(0)"
-                       class="px-2 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-800 text-[11px] font-semibold">
+            ? `<button type="button" onclick="window.applyQuickDatePreset('all')"
+                       class="px-2 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-800 text-[11px] font-semibold cursor-pointer">
                  Clear
                </button>`
             : ""
         }
+        <button type="button" onclick="window.applyQuickDatePreset('today')"
+                class="${presetBtnClass(isTodaySelected)}">
+          Today
+        </button>
+        <button type="button" onclick="window.applyQuickDatePreset('yesterday')"
+                class="${presetBtnClass(isYesterdaySelected)}">
+          Yesterday
+        </button>
         <button type="button" onclick="window.applyQuickDatePreset(7)"
-                class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px]">
+                class="${presetBtnClass(false)}">
           7d
         </button>
         <button type="button" onclick="window.applyQuickDatePreset(14)"
-                class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px]">
+                class="${presetBtnClass(false)}">
           14d
         </button>
         <button type="button" onclick="window.applyQuickDatePreset(30)"
-                class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px]">
+                class="${presetBtnClass(false)}">
           30d
         </button>
-        <button type="button" onclick="window.applyQuickDatePreset(0)"
-                class="px-2 py-1 rounded-lg ${
-                  !logDateFrom && !logDateTo
-                    ? "bg-teal-700 text-white font-semibold"
-                    : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
-                } text-[11px]">
+        <button type="button" onclick="window.applyQuickDatePreset('all')"
+                class="${presetBtnClass(!logDateFrom && !logDateTo)}">
           All
         </button>
       </div>
@@ -1290,6 +1399,15 @@ function renderActiveTab() {
         .map((row) => {
           const rowDraft = logDrafts[getLogRowDraftKey(activeKey, row._sheetRow)] || {};
           const rowIsDirty = Boolean(rowDraft.notesDirty || rowDraft.flagDirty || rowDraft.amDirty);
+          const dateValForRow = String(row[dateKey] || "").trim();
+          const dateAlignKey = `${activeKey}__${row._sheetRow}`;
+          const isDateAlignOpen = Boolean(expandedDateAlignRows[dateAlignKey]);
+
+          const dayWorkSession = findHubstaffSessionForDate(tabObj, dateValForRow);
+          const dayActivityStr = dayWorkSession
+            ? `${dayWorkSession.avgActivityPct ?? 0}%`
+            : liveActivity7d;
+          const dayTrackedStr = dayWorkSession ? dayWorkSession.totalDuration : liveAvgHrs;
 
           const cells = headers
             .map((rawH, idx) => {
@@ -1314,10 +1432,10 @@ function renderActiveTab() {
                       </span>
                       <span class="w-1.5 h-1.5 rounded-full ${isOnline ? "bg-emerald-400" : "bg-slate-600"}"></span>
 
-                      <div class="hidden group-hover:block absolute left-0 bottom-full mb-2 z-50 w-64 bg-slate-950/95 backdrop-blur-md border border-teal-700/70 rounded-xl p-3 shadow-2xl pointer-events-none space-y-2 text-left whitespace-normal">
+                      <div class="hidden group-hover:block absolute left-0 bottom-full mb-2 z-50 w-72 bg-slate-950/95 backdrop-blur-md border border-teal-700/70 rounded-xl p-3 shadow-2xl pointer-events-none space-y-2 text-left whitespace-normal">
                         <div class="flex items-center justify-between border-b border-slate-800 pb-1.5">
                           <span class="text-[10px] font-bold uppercase tracking-wider text-teal-300">
-                            ${escapeHtml(tabObj.tabName)} • Live Status
+                            ${escapeHtml(tabObj.tabName)} • Date Activity
                           </span>
                           <span class="text-[10px] font-mono text-slate-400">${escapeHtml(serverVal)}</span>
                         </div>
@@ -1329,12 +1447,12 @@ function renderActiveTab() {
 
                         <div class="grid grid-cols-3 gap-1.5 pt-1 text-center font-mono">
                           <div class="bg-slate-900 border border-slate-800 rounded-lg p-1.5">
-                            <span class="block text-[9px] text-slate-400 font-sans">Activity (7d)</span>
-                            <div class="mt-0.5 text-xs">${formatConditionalActivityBadge(liveActivity)}</div>
+                            <span class="block text-[9px] text-slate-400 font-sans">${dayWorkSession ? "Date Activity" : "Activity (7d)"}</span>
+                            <div class="mt-0.5 text-xs">${formatConditionalActivityBadge(dayActivityStr)}</div>
                           </div>
                           <div class="bg-slate-900 border border-slate-800 rounded-lg p-1.5">
-                            <span class="block text-[9px] text-slate-400 font-sans">Avg Hrs</span>
-                            <strong class="text-xs text-slate-200">${escapeHtml(liveAvgHrs)}</strong>
+                            <span class="block text-[9px] text-slate-400 font-sans">${dayWorkSession ? "Tracked" : "Avg Hrs"}</span>
+                            <strong class="text-xs text-slate-200">${escapeHtml(dayTrackedStr)}</strong>
                           </div>
                           <div class="bg-slate-900 border border-slate-800 rounded-lg p-1.5">
                             <span class="block text-[9px] text-slate-400 font-sans">Late (7d)</span>
@@ -1372,14 +1490,12 @@ function renderActiveTab() {
 
               if (lowerHeader === "notes") {
                 const effectiveNote = rowDraft.notesDirty ? rowDraft.notesVal : serverVal;
-                const hasSod = effectiveNote.includes(TAG_START);
-                const hasEod = effectiveNote.includes(TAG_END);
                 const amKey = `${activeKey}_row_${row._sheetRow}`;
                 const effectiveAmText = rowDraft.amDirty ? rowDraft.amVal : (siteAmComms[amKey] || "");
                 const isAmOpen = Boolean(expandedAmRows[amKey]);
 
                 return `
-                  <td class="p-2 min-w-[340px] max-w-[520px] align-top space-y-2">
+                  <td class="p-2 min-w-[320px] align-top space-y-2">
                     <textarea id="note-box-${row._sheetRow}" rows="1"
                               oninput="window.autoResizeNote(this); window.stageNoteEdit('${tabObj.tabName}', ${row._sheetRow}, ${exactSheetCol}, this.value)"
                               placeholder="Add TL note..."
@@ -1398,25 +1514,14 @@ function renderActiveTab() {
                         <span>${isAmOpen ? "Hide Comms" : effectiveAmText.trim() ? "AM Comms (Logged)" : "+ AM Comms"}</span>
                       </button>
 
-                      <div class="flex items-center gap-1.5">
-                        <button id="sod-btn-${row._sheetRow}" type="button" onclick="window.toggleRowTag('${tabObj.tabName}', ${row._sheetRow}, ${exactSheetCol}, '${TAG_START}')"
-                                class="py-0.5 px-2 rounded-md text-[10px] font-bold border transition cursor-pointer ${
-                                  hasSod
-                                    ? "bg-emerald-950/90 text-emerald-300 border-emerald-600"
-                                    : "bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200"
-                                }">
-                          ☀️ ${hasSod ? "✓ SOD" : "+ SOD"}
-                        </button>
-
-                        <button id="eod-btn-${row._sheetRow}" type="button" onclick="window.toggleRowTag('${tabObj.tabName}', ${row._sheetRow}, ${exactSheetCol}, '${TAG_END}')"
-                                class="py-0.5 px-2 rounded-md text-[10px] font-bold border transition cursor-pointer ${
-                                  hasEod
-                                    ? "bg-indigo-950/90 text-indigo-300 border-indigo-600"
-                                    : "bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200"
-                                }">
-                          🌙 ${hasEod ? "✓ EOD" : "+ EOD"}
-                        </button>
-                      </div>
+                      <button type="button" onclick="window.toggleDateAlignRow(${row._sheetRow})"
+                              class="py-0.5 px-2.5 rounded-md text-[10px] font-bold border transition cursor-pointer ${
+                                isDateAlignOpen
+                                  ? "bg-blue-800 text-white border-blue-500"
+                                  : "bg-slate-950 text-blue-300 border-slate-800 hover:border-blue-600"
+                              }">
+                        ${isDateAlignOpen ? "▲ Hide Alignment" : isProb ? "🎯 Daily Task Alignment" : "🎯 Weekly SOW Alignment"}
+                      </button>
                     </div>
 
                     ${
@@ -1438,7 +1543,21 @@ function renderActiveTab() {
             })
             .join("");
 
-          return `<tr class="border-t border-slate-800 ${rowIsDirty ? "bg-amber-950/15" : "hover:bg-slate-800/40"}">${cells}</tr>`;
+          const perDateAlignRowHtml = isDateAlignOpen
+            ? `<tr class="bg-slate-950/95 border-t border-blue-800/60">
+                <td colspan="${headers.length || 1}" class="p-3 sm:p-4">
+                  ${buildAlignmentDrawerHtml({
+                    targetSheetRow: row._sheetRow,
+                    targetDateLabel: dateValForRow || `Row ${row._sheetRow}`
+                  })}
+                </td>
+              </tr>`
+            : "";
+
+          return `
+            <tr class="border-t border-slate-800 ${rowIsDirty ? "bg-amber-950/15" : "hover:bg-slate-800/40"}">${cells}</tr>
+            ${perDateAlignRowHtml}
+          `;
         })
         .join("")
     : `<tr><td colspan="${headers.length || 1}" class="p-6 text-center text-slate-400 text-xs">No log rows match the selected date range.</td></tr>`;

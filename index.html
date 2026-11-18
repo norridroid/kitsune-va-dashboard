@@ -47,12 +47,29 @@
         <div class="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           <input id="search-input" type="text" placeholder="Filter by VA, schedule, or coaching focus..."
                  class="w-full sm:w-64 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs focus:outline-none focus:border-teal-500" />
-          <button id="sort-schedule-btn" class="px-2.5 py-1.5 rounded-lg bg-teal-900/70 hover:bg-teal-800 border border-teal-700 text-xs text-teal-100 font-medium">
+          <button id="sort-schedule-btn" class="px-2.5 py-1.5 rounded-lg bg-teal-900/70 hover:bg-teal-800 border border-teal-700 text-xs text-teal-100 font-medium cursor-pointer">
             Order by Schedule
           </button>
-          <button id="sheet-order-btn" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300">
+          <button id="sheet-order-btn" class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300 cursor-pointer">
             Sheet Order
           </button>
+
+          <!-- Column Visibility Picker -->
+          <div class="relative">
+            <button id="toggle-columns-menu-btn" type="button"
+                    class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-200 font-medium cursor-pointer">
+              ⚙️ Columns
+            </button>
+            <div id="columns-menu-dropdown"
+                 class="hidden absolute left-0 mt-1.5 z-50 w-52 bg-slate-900 border border-slate-700 rounded-xl p-2.5 shadow-2xl space-y-1.5 text-xs">
+              <div class="flex items-center justify-between border-b border-slate-800 pb-1.5 mb-1">
+                <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Visible Columns</span>
+                <button type="button" id="reset-columns-btn" class="text-[10px] text-teal-400 hover:text-teal-300 underline cursor-pointer">Show All</button>
+              </div>
+              <div id="columns-checkbox-list" class="space-y-1"></div>
+            </div>
+          </div>
+
           <button id="toggle-hidden-btn" class="hidden px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-amber-300">
             Show hidden (0)
           </button>
@@ -60,31 +77,31 @@
             Restore all
           </button>
         </div>
-        <span class="text-[11px] text-slate-400">Click ⚡ Align to expand SOW &amp; daily notes • Click VA name for full dossier</span>
+        <span class="text-[11px] text-slate-400">Click + Align to expand SOW &amp; daily notes • Click VA name for full dossier</span>
       </div>
 
       <!-- Auto-generated color legend for active work schedules -->
       <div id="schedule-legend" class="flex flex-wrap items-center gap-1.5"></div>
     </div>
 
-    <!-- Compact Full-Fit Summary Table -->
-    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+    <!-- Responsive Summary Table -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
       <table class="w-full text-left border-collapse text-xs">
         <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider select-none">
           <tr>
-            <th class="px-2 py-2.5 w-24 text-center">Actions</th>
-            <th data-sort="va" class="px-2 py-2.5 cursor-pointer hover:text-white">VA <span class="sort-ind"></span></th>
-            <th data-sort="startMinutes" class="px-2 py-2.5 cursor-pointer hover:text-white">Schedule <span class="sort-ind"></span></th>
-            <th data-sort="statusNow" class="px-2 py-2.5 cursor-pointer hover:text-white">Status Now <span class="sort-ind"></span></th>
-            <th data-sort="daysWorked" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Days <span class="sort-ind"></span></th>
-            <th data-sort="avgHrsPerDay" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Avg Hrs <span class="sort-ind"></span></th>
-            <th data-sort="lateClockIns" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Late <span class="sort-ind"></span></th>
-            <th data-sort="earlyLogOutsShortDays" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">Early/<br/>Short <span class="sort-ind"></span></th>
-            <th data-sort="avgActivity" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Activity <span class="sort-ind"></span></th>
-            <th data-sort="flagDays" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">Flag<br/>Days <span class="sort-ind"></span></th>
-            <th data-sort="flagDays30d" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">30d<br/>Flags <span class="sort-ind"></span></th>
-            <th data-sort="tlFlagsYellowRed" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">TL<br/>Flags <span class="sort-ind"></span></th>
-            <th data-sort="coachingFocus" class="px-2 py-2.5 cursor-pointer hover:text-white">Coaching Focus <span class="sort-ind"></span></th>
+            <th data-col="actions" class="px-2 py-2.5 w-24 text-center">Actions</th>
+            <th data-col="va" data-sort="va" class="px-2 py-2.5 cursor-pointer hover:text-white">VA <span class="sort-ind"></span></th>
+            <th data-col="schedule" data-sort="startMinutes" class="px-2 py-2.5 cursor-pointer hover:text-white">Schedule <span class="sort-ind"></span></th>
+            <th data-col="status" data-sort="statusNow" class="px-2 py-2.5 cursor-pointer hover:text-white">Status Now <span class="sort-ind"></span></th>
+            <th data-col="days" data-sort="daysWorked" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Days <span class="sort-ind"></span></th>
+            <th data-col="avgHrs" data-sort="avgHrsPerDay" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Avg Hrs <span class="sort-ind"></span></th>
+            <th data-col="late" data-sort="lateClockIns" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Late <span class="sort-ind"></span></th>
+            <th data-col="earlyShort" data-sort="earlyLogOutsShortDays" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">Early/<br/>Short <span class="sort-ind"></span></th>
+            <th data-col="activity" data-sort="avgActivity" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white">Activity <span class="sort-ind"></span></th>
+            <th data-col="flagDays" data-sort="flagDays" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">Flag<br/>Days <span class="sort-ind"></span></th>
+            <th data-col="flags30d" data-sort="flagDays30d" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">30d<br/>Flags <span class="sort-ind"></span></th>
+            <th data-col="tlFlags" data-sort="tlFlagsYellowRed" class="px-1.5 py-2.5 text-center cursor-pointer hover:text-white leading-tight">TL<br/>Flags <span class="sort-ind"></span></th>
+            <th data-col="coaching" data-sort="coachingFocus" class="px-2 py-2.5 cursor-pointer hover:text-white">Coaching Focus <span class="sort-ind"></span></th>
           </tr>
         </thead>
         <tbody id="va-tbody" class="divide-y divide-slate-800/80 text-[11px]">
