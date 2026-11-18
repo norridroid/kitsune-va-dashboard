@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kitsune — Hubstaff Live View</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./css/theme.css" />
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="bg-teal-950 border-b border-teal-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-xl font-bold text-white">Hubstaff Live View</h1>
+      <p id="hs-sync-status" class="text-xs text-teal-300">Auto-refreshes every 15 minutes • View-only (does not write to Google Sheets)</p>
+    </div>
+    <nav id="main-nav" class="flex flex-wrap gap-2"></nav>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-6 space-y-5">
+    <!-- Top Mode Switcher: Work Sessions vs Time Off Requests -->
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="inline-flex rounded-xl bg-slate-900 border border-slate-800 p-1 gap-1">
+        <button id="mode-sessions-btn" type="button"
+                class="px-4 py-2 rounded-lg bg-teal-600 text-white font-bold text-xs shadow transition cursor-pointer">
+          ⏱️ Work Sessions
+        </button>
+        <button id="mode-timeoff-btn" type="button"
+                class="px-4 py-2 rounded-lg text-slate-300 hover:text-white font-semibold text-xs transition cursor-pointer flex items-center gap-2">
+          <span>🗓️ Time Off Requests</span>
+          <span id="to-nav-badge" class="hidden px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-700 text-[10px] font-mono">0</span>
+        </button>
+      </div>
+
+      <a href="https://app.hubstaff.com/organizations/700726/time_off_requests" target="_blank" rel="noreferrer"
+         class="text-xs text-teal-300 hover:text-teal-200 underline">
+        Open Hubstaff Time Off Page ↗
+      </a>
+    </div>
+
+    <!-- ==================================================================== -->
+    <!-- VIEW 1: WORK SESSIONS                                                -->
+    <!-- ==================================================================== -->
+    <div id="view-work-sessions" class="space-y-5">
+      <!-- Single-Day Stepper & Synced Range Controls -->
+      <div class="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-bold text-slate-300 uppercase tracking-wider text-[11px]">📅 Session Date:</span>
+
+          <button id="hs-prev-day-btn" type="button" title="Previous available date"
+                  class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-100 font-bold border border-slate-700 transition">
+            ◀ Prev
+          </button>
+
+          <select id="hs-date-select"
+                  class="bg-slate-950 border border-teal-700/80 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-teal-200 focus:border-teal-400 focus:outline-none">
+            <option value="">Loading dates...</option>
+          </select>
+
+          <button id="hs-next-day-btn" type="button" title="Next available date"
+                  class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-100 font-bold border border-slate-700 transition">
+            Next ▶
+          </button>
+
+          <button id="hs-latest-day-btn" type="button"
+                  class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-semibold">
+            Latest Day
+          </button>
+
+          <span id="hs-available-range-badge"
+                class="hidden sm:inline-block ml-1 px-2.5 py-1 rounded-full bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-400">
+            Synced Range: —
+          </span>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="hs-paste-toggle-btn" type="button"
+                  class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold">
+            📋 Paste Table Fallback
+          </button>
+          <button id="hs-refresh-btn" type="button"
+                  class="px-3.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold shadow">
+            🔄 Live Feed
+          </button>
+        </div>
+      </div>
+
+      <!-- Optional Quick Paste Fallback Drawer -->
+      <div id="hs-paste-drawer" class="hidden bg-slate-900 border border-teal-700/60 p-4 rounded-2xl space-y-3 text-xs">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-teal-300 uppercase">📋 Paste Copied Rows from Hubstaff Work Sessions Report</span>
+          <button id="hs-paste-close" type="button" class="text-slate-400 hover:text-white underline">Close</button>
+        </div>
+        <textarea id="hs-paste-input" rows="5"
+                  placeholder="Select the table rows in Hubstaff Work Sessions, press Ctrl+C, and paste here (Ctrl+V)..."
+                  class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 font-mono text-xs text-slate-100 focus:border-teal-500 focus:outline-none"></textarea>
+        <div class="flex justify-end">
+          <button id="hs-paste-parse-btn" type="button"
+                  class="px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold">
+            Render Sessions View
+          </button>
+        </div>
+      </div>
+
+      <!-- Per-Date Summary Rollup KPIs -->
+      <section class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
+          <div class="text-[11px] text-slate-400 uppercase">Active Members</div>
+          <div id="hs-kpi-members" class="text-2xl font-bold mt-0.5">-</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
+          <div class="text-[11px] text-slate-400 uppercase">Total Tracked Time</div>
+          <div id="hs-kpi-time" class="text-2xl font-bold text-teal-300 font-mono mt-0.5">-</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
+          <div class="text-[11px] text-slate-400 uppercase">Avg Activity</div>
+          <div id="hs-kpi-activity" class="text-2xl font-bold mt-0.5">-</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 text-center">
+          <div class="text-[11px] text-slate-400 uppercase">Low Activity (&lt;30%)</div>
+          <div id="hs-kpi-low" class="text-2xl font-bold text-rose-400 mt-0.5">-</div>
+        </div>
+      </section>
+
+      <!-- 6-Column Aggregated Work Sessions Table (Selected Date Only) -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider">
+            <tr>
+              <th class="px-4 py-3">Member</th>
+              <th class="px-3 py-3 text-center">Started</th>
+              <th class="px-3 py-3 text-center">Stopped</th>
+              <th class="px-3 py-3 text-center">Total Duration</th>
+              <th class="px-3 py-3 text-center">Avg Activity</th>
+              <th class="px-3 py-3 text-center">Sessions</th>
+            </tr>
+          </thead>
+          <tbody id="hs-tbody" class="divide-y divide-slate-800/80">
+            <tr><td colspan="6" class="p-6 text-center text-slate-500">Waiting for Hubstaff sync...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ==================================================================== -->
+    <!-- VIEW 2: TIME OFF REQUESTS                                            -->
+    <!-- ==================================================================== -->
+    <div id="view-time-off" class="hidden space-y-5">
+      <!-- Time Off Controls & Counts Bar -->
+      <div class="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div class="flex flex-wrap items-center gap-2.5">
+          <span id="to-active-tab-badge" class="px-2.5 py-1 rounded-full bg-amber-950/80 text-amber-300 border border-amber-700 font-bold">
+            Active View: Submitted
+          </span>
+          <span id="to-counts-summary" class="text-slate-400 font-mono">
+            Submitted: - • Approved: - • Denied: -
+          </span>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="inline-flex items-center gap-1.5 cursor-pointer text-slate-300">
+            <input id="to-kitsune-only" type="checkbox" checked class="rounded bg-slate-950 border-slate-700 text-teal-500" />
+            <span>Kitsune VAs Only</span>
+          </label>
+          <span id="to-synced-label" class="text-[11px] font-mono text-slate-400">Waiting for sync...</span>
+        </div>
+      </div>
+
+      <!-- Time Off Requests Table -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider">
+            <tr>
+              <th class="px-4 py-3">Member</th>
+              <th class="px-3 py-3">Policy</th>
+              <th class="px-3 py-3">Reason</th>
+              <th class="px-3 py-3 whitespace-nowrap">Start</th>
+              <th class="px-3 py-3 whitespace-nowrap">End</th>
+              <th class="px-3 py-3 text-center">Hours</th>
+              <th class="px-3 py-3 text-center">Status</th>
+              <th class="px-3 py-3 whitespace-nowrap">Requested On</th>
+            </tr>
+          </thead>
+          <tbody id="to-tbody" class="divide-y divide-slate-800/80">
+            <tr><td colspan="8" class="p-6 text-center text-slate-500">Open your Hubstaff Time Off Requests tab to sync automatically.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script type="module" src="./js/hubstaff.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "kitsune-va-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve . -l 3000",
+    "deploy": "npx wrangler pages deploy . --project-name=lva-dashboards"
+  },
+  "devDependencies": {
+    "serve": "^14.2.8",
+    "wrangler": "^3.114.17"
+  }
+}

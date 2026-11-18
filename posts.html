@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kitsune — Daily Post Templates</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./css/theme.css" />
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="bg-teal-950 border-b border-teal-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-xl font-bold text-white">Daily Post & Announcement Vault</h1>
+      <p class="text-xs text-teal-300">Live Mon–Fri SOD broadcast templates & categorised team reminders</p>
+    </div>
+    <nav id="main-nav" class="flex flex-wrap gap-2"></nav>
+  </header>
+
+  <main class="max-w-5xl mx-auto p-6 space-y-6">
+    <!-- Mon-Fri SOD Template Box -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+        <div id="day-pills" class="flex gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800"></div>
+        <div class="flex gap-2">
+          <button id="copy-sod-btn" type="button" class="px-3.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-xs font-bold text-white">📋 Copy Template</button>
+          <button id="save-sod-btn" type="button" class="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-xs font-bold text-white">💾 Save Template</button>
+        </div>
+      </div>
+      <textarea id="sod-textarea" rows="8" placeholder="Write your SOD morning huddle template for this day..."
+                class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs font-mono text-slate-200 leading-relaxed"></textarea>
+    </div>
+
+    <!-- Categorised Custom Reminders -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h2 class="text-xs font-bold text-white uppercase">📌 Categorised Operational Reminders</h2>
+        <button id="toggle-add-rem" type="button" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">+ Add Reminder</button>
+      </div>
+
+      <form id="add-rem-form" class="hidden bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <input id="rem-title" type="text" required placeholder="Reminder title..." class="sm:col-span-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+          <input id="rem-cat" type="text" value="General" placeholder="Folder / Category" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+        </div>
+        <textarea id="rem-notes" rows="4" placeholder="Reminder details..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 font-mono text-slate-200"></textarea>
+        <div class="flex justify-end">
+          <button type="submit" class="px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-bold">Save Reminder</button>
+        </div>
+      </form>
+
+      <div id="reminders-list" class="space-y-2.5"></div>
+    </div>
+  </main>
+
+  <script type="module" src="./js/posts.js"></script>
+</body>
+</html>

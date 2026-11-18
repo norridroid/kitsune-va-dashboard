@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kitsune — Alerts, Probation & Directory</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="./css/theme.css" />
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="bg-teal-950 border-b border-teal-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-xl font-bold text-white">Alerts, Probation & Team Directory</h1>
+      <p class="text-xs text-teal-300">3-month probation countdowns, 30-day birthday radar & emergency contacts</p>
+    </div>
+    <nav id="main-nav" class="flex flex-wrap gap-2">
+      <a href="index.html" class="px-3 py-1.5 rounded text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 text-slate-200">Overview</a>
+      <a href="va-detail.html" class="px-3 py-1.5 rounded text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 text-slate-200">VA Dossiers &amp; Logs</a>
+      <a href="tasks.html" class="px-3 py-1.5 rounded text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 text-slate-200">TL Tasks</a>
+      <a href="alerts.html" class="px-3 py-1.5 rounded text-xs sm:text-sm bg-teal-700 text-white font-semibold shadow-sm">Alerts &amp; Directory</a>
+      <a href="posts.html" class="px-3 py-1.5 rounded text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 text-slate-200">Daily Posts</a>
+      <a href="tabs.html" class="px-3 py-1.5 rounded text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 text-slate-200">Select Tabs</a>
+    </nav>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-6 space-y-6">
+    <div id="alerts-error" class="hidden bg-rose-950/80 border border-rose-700 text-rose-200 text-xs p-3 rounded-xl font-mono"></div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+        <h2 class="text-xs font-bold text-slate-200 uppercase">⏳ 3-Month Probation Milestones</h2>
+        <div id="probation-list" class="space-y-2 max-h-80 overflow-y-auto">
+          <p class="text-xs text-slate-500">Loading probation milestones...</p>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+        <h2 class="text-xs font-bold text-slate-200 uppercase">🎂 Upcoming Birthdays (Next 30 Days)</h2>
+        <div id="birthday-list" class="space-y-2 max-h-80 overflow-y-auto">
+          <p class="text-xs text-slate-500">Loading birthday radar...</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-xs font-bold text-slate-200 uppercase">📞 Team Directory &amp; Emergency Contacts (Site-Only)</h2>
+        <span id="dir-save-status" class="text-xs text-emerald-400 font-mono"></span>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="p-3 w-48">VA Name</th>
+              <th class="p-3 w-44">Primary Contact</th>
+              <th class="p-3 w-36">TL Lead</th>
+              <th class="p-3 min-w-[380px]">Emergency Contact, Client ID &amp; Operational Notes</th>
+            </tr>
+          </thead>
+          <tbody id="directory-tbody" class="divide-y divide-slate-800">
+            <tr><td colspan="4" class="p-6 text-center text-slate-500">Loading team directory...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script type="module" src="./js/alerts.js"></script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+:root {
+  --bg-deep: #040812;
+  --glass-bg: rgba(15, 23, 42, 0.68);
+  --glass-border: rgba(45, 212, 191, 0.16);
+  --glow-teal: rgba(20, 184, 166, 0.18);
+  --glow-indigo: rgba(99, 102, 241, 0.14);
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-deep);
+  background-image:
+    radial-gradient(circle at 12% 8%, var(--glow-teal) 0%, transparent 42%),
+    radial-gradient(circle at 88% 12%, var(--glow-indigo) 0%, transparent 45%),
+    radial-gradient(circle at 50% 95%, rgba(16, 185, 129, 0.08) 0%, transparent 50%);
+  background-attachment: fixed;
+  color: #f1f5f9;
+}
+
+.font-mono, code, pre {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Frosted Glass Header */
+header {
+  background: linear-gradient(135deg, rgba(4, 47, 46, 0.88) 0%, rgba(15, 23, 42, 0.92) 100%) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(45, 212, 191, 0.25) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* Glassmorphism Cards & Containers */
+main section > div,
+main > div.bg-slate-900,
+main form.bg-slate-900 {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.55);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* KPI Card Hover Lift */
+main section.grid > div:hover {
+  transform: translateY(-2px);
+  border-color: rgba(45, 212, 191, 0.45) !important;
+  box-shadow: 0 12px 28px -8px rgba(20, 184, 166, 0.22);
+}
+
+/* Glowing Table Row Hover */
+tbody tr {
+  transition: background-color 0.18s ease, transform 0.15s ease;
+}
+
+tbody tr:hover {
+  background-color: rgba(30, 41, 59, 0.72) !important;
+}
+
+/* Live Status Pulse Dot */
+@keyframes pulseRing {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+.live-pulse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background-color: #34d399;
+  animation: pulseRing 2s infinite;
+}
+
+/* Subtle Entrance Animation */
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+main {
+  animation: fadeSlideUp 0.35s ease-out;
+}
+
+/* Sleek Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.28);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 212, 191, 0.55);
+}
