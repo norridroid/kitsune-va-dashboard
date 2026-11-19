@@ -38,6 +38,8 @@ const COLUMN_CONFIG = [
 ];
 
 const HIDDEN_COLS_STORAGE_KEY = "kitsune_overview_hidden_cols";
+const HIDDEN_VAS_STORAGE_KEY = "kitsune_hidden_vas";
+
 let hiddenCols = new Set();
 try {
   const savedCols = JSON.parse(localStorage.getItem(HIDDEN_COLS_STORAGE_KEY) || "[]");
@@ -136,6 +138,7 @@ applyColumnVisibilityToHeader();
 let latestData = {};
 let sortMode = "schedule";
 let searchFilter = "";
+let showHiddenVas = false;
 let expandedVaId = null;
 let isAccordionGoalsOpen = false;
 let expandedAmRows = {};
@@ -216,6 +219,64 @@ if (sortSheetBtn) {
   });
 }
 
+const toggleHiddenBtn = document.getElementById("toggle-hidden-btn");
+const unhideAllBtn = document.getElementById("unhide-all-btn");
+
+if (toggleHiddenBtn) {
+  toggleHiddenBtn.addEventListener("click", () => {
+    showHiddenVas = !showHiddenVas;
+    renderDashboard();
+  });
+}
+
+if (unhideAllBtn) {
+  unhideAllBtn.addEventListener("click", () => {
+    try {
+      localStorage.removeItem(HIDDEN_VAS_STORAGE_KEY);
+    } catch (_) {}
+    showHiddenVas = false;
+    showOverviewToast("✓ Restored all hidden VAs!");
+    renderDashboard();
+  });
+}
+
+window.hideSingleVa = (vaId) => {
+  const current = getHiddenVaSet();
+  current.add(vaId);
+  try {
+    localStorage.setItem(HIDDEN_VAS_STORAGE_KEY, JSON.stringify([...current]));
+  } catch (_) {}
+  if (expandedVaId === vaId) expandedVaId = null;
+  showOverviewToast("VA hidden — click 'Show hidden' or 'Restore all' in the toolbar to bring them back.");
+  renderDashboard();
+};
+
+window.unhideSingleVa = (vaId) => {
+  const current = getHiddenVaSet();
+  current.delete(vaId);
+  try {
+    localStorage.setItem(HIDDEN_VAS_STORAGE_KEY, JSON.stringify([...current]));
+  } catch (_) {}
+  if (current.size === 0) showHiddenVas = false;
+  showOverviewToast("✓ VA restored to Overview!");
+  renderDashboard();
+};
+
+function updateHiddenVaControlsUI(hiddenCount) {
+  if (!toggleHiddenBtn || !unhideAllBtn) return;
+  if (hiddenCount > 0) {
+    toggleHiddenBtn.classList.remove("hidden");
+    unhideAllBtn.classList.remove("hidden");
+    toggleHiddenBtn.textContent = showHiddenVas
+      ? `Hide hidden (${hiddenCount})`
+      : `Show hidden (${hiddenCount})`;
+  } else {
+    toggleHiddenBtn.classList.add("hidden");
+    unhideAllBtn.classList.add("hidden");
+    showHiddenVas = false;
+  }
+}
+
 window.openVaPage = (tabKey, vaName) => {
   const safeKey = String(tabKey || "").trim();
   const safeName = String(vaName || "").trim();
@@ -230,6 +291,86 @@ window.toggleVaAccordion = (vaId) => {
   isAccordionGoalsOpen = false;
   renderDashboard();
 };
+
+function toLocalIsoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function parseRowDateToIso(rawStr) {
+  const s = String(rawStr || "").trim();
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  const dmyMatch = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{2,4})$/);
+  if (dmyMatch) {
+    const day = dmyMatch[1];
+    const mon = dmyMatch[2];
+    const yr = dmyMatch[3].length === 2 ? `20${dmyMatch[3]}` : dmyMatch[3];
+    const parsedDmy = new Date(`${mon} ${day}, ${yr}`);
+    if (!isNaN(parsedDmy.getTime())) return toLocalIsoDate(parsedDmy);
+  }
+
+  const hasYear = /\b20\d{2}\b/.test(s);
+  const candidate = hasYear ? s : `${s}, ${new Date().getFullYear()}`;
+  const d = new Date(candidate);
+  if (isNaN(d.getTime())) return "";
+
+  return toLocalIsoDate(d);
+}
+
+/**
+ * Checks how many days ago the VA's Notes were last updated (Yesterday = 1d, 2d ago, 3+ days ago).
+ */
+function getOverviewNoteStalenessBadge(tabObj) {
+  if (!tabObj || !Array.isArray(tabObj.rows) || !tabObj.rows.length) return "";
+
+  const headers = tabObj.headers || [];
+  const cleanHeaders = tabObj.cleanHeaders || [];
+  const dateIdx = headers.findIndex((h, idx) => idx === 0 || /week|date/i.test(h));
+  const dateKey = dateIdx !== -1 ? cleanHeaders[dateIdx] : cleanHeaders[0];
+  const notesIdx = headers.findIndex((h) => h.toLowerCase() === "notes");
+  const notesKey = notesIdx !== -1 ? cleanHeaders[notesIdx] : "Notes";
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayIso = toLocalIsoDate(today);
+
+  let latestNoteIso = "";
+  let latestNoteDateLabel = "";
+
+  tabObj.rows.forEach((r) => {
+    const rawDate = String(r[dateKey] || "").trim();
+    const iso = parseRowDateToIso(rawDate);
+    if (!iso || iso > todayIso) return;
+
+    const noteVal = String(r[notesKey] !== undefined ? r[notesKey] : r.Notes || r.notes || "").trim();
+    if (noteVal.length > 0) {
+      if (!latestNoteIso || iso > latestNoteIso) {
+        latestNoteIso = iso;
+        latestNoteDateLabel = rawDate;
+      }
+    }
+  });
+
+  if (!latestNoteIso) {
+    return `<span title="No notes logged yet" class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-rose-950 text-rose-300 border border-rose-700 animate-pulse">🚨 No notes</span>`;
+  }
+
+  const lastDate = new Date(`${latestNoteIso}T00:00:00`);
+  const diffDays = Math.round((today.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays <= 0) return "";
+
+  if (diffDays === 1) {
+    return `<span title="Last note updated Yesterday (${escapeHtml(latestNoteDateLabel)})" class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-950/90 text-amber-300 border border-amber-700">⚠️ Yesterday</span>`;
+  }
+
+  if (diffDays === 2) {
+    return `<span title="No note updated for 2 days (Last: ${escapeHtml(latestNoteDateLabel)})" class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-orange-950/90 text-orange-300 border border-orange-700">🟠 2d ago</span>`;
+  }
+
+  return `<span title="No note updated for ${diffDays} days (Last: ${escapeHtml(latestNoteDateLabel)})" class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-rose-950 text-rose-300 border border-rose-700 animate-pulse">🚨 ${diffDays}d ago</span>`;
+}
 
 function findCurrentDateActivityForVa(vaName, tabObj, liveRows) {
   if (!Array.isArray(liveRows) || !liveRows.length) return null;
@@ -291,10 +432,12 @@ function renderDashboard() {
   applyColumnVisibilityToHeader();
   const visibleColSpan = getVisibleColCount();
 
+  let activeHiddenCount = 0;
+
   const enrichedList = order
     .filter((id) => {
       const v = vas[id];
-      if (!v || hiddenSet.has(id)) return false;
+      if (!v) return false;
       const vaText = String(v.va || "").trim();
       const lower = vaText.toLowerCase();
       if (
@@ -308,6 +451,10 @@ function renderDashboard() {
       ) {
         return false;
       }
+      if (hiddenSet.has(id)) {
+        activeHiddenCount++;
+        if (!showHiddenVas) return false;
+      }
       return true;
     })
     .map((id, sheetIndex) => {
@@ -318,12 +465,15 @@ function renderDashboard() {
         id,
         sheetIndex,
         v,
+        isHiddenVa: hiddenSet.has(id),
         matchedTab,
         targetKey: schedInfo.matchedTabKey || v.id,
         shiftLabel: schedInfo.shiftLabel,
         startMinutes: schedInfo.startMinutes
       };
     });
+
+  updateHiddenVaControlsUI(activeHiddenCount);
 
   const { colorMap, unsetStyle } = buildScheduleColorMap(enrichedList);
 
@@ -348,7 +498,7 @@ function renderDashboard() {
 
   tbody.innerHTML = filteredList
     .map((item) => {
-      const { id, v, matchedTab, targetKey, shiftLabel } = item;
+      const { id, v, isHiddenVa, matchedTab, targetKey, shiftLabel } = item;
       const profile = siteProfiles[targetKey] || siteProfiles[v.id] || {};
       const isProb = profile.employmentTier === "prob";
       const safeId = String(id).replace(/'/g, "\\'");
@@ -359,6 +509,7 @@ function renderDashboard() {
       const tabObj = matchedTab ? matchedTab.tab : null;
       const latestRow = tabObj && Array.isArray(tabObj.rows) && tabObj.rows.length ? tabObj.rows[tabObj.rows.length - 1] : null;
       const shiftDateVal = latestRow ? String(latestRow.Date || latestRow.Week || "Today").trim() : "Today";
+      const staleNoteBadge = getOverviewNoteStalenessBadge(tabObj);
 
       const todayWorkSession = findCurrentDateActivityForVa(v.va, tabObj, liveRows);
       const currentDateActBadge = todayWorkSession
@@ -385,16 +536,31 @@ function renderDashboard() {
         : "";
 
       return `
-        <tr class="hover:bg-slate-800/40 transition-colors ${schedStyle.accent} ${isExpanded ? "bg-slate-900/80" : ""}">
+        <tr class="hover:bg-slate-800/40 transition-colors ${schedStyle.accent} ${isExpanded ? "bg-slate-900/80" : ""} ${isHiddenVa ? "opacity-60 bg-slate-950/60" : ""}">
           <td class="px-3 py-2.5 text-center whitespace-nowrap">
-            <button type="button" onclick="window.toggleVaAccordion('${safeId}')"
-                    class="px-2.5 py-1 rounded-md text-[11px] font-bold border transition cursor-pointer ${
-                      isExpanded
-                        ? "bg-teal-700 text-white border-teal-500"
-                        : "bg-slate-900 hover:bg-slate-800 text-teal-300 border-slate-700"
-                    }">
-              ${isExpanded ? "− Close" : "+ Align"}
-            </button>
+            <div class="inline-flex items-center gap-1">
+              <button type="button" onclick="window.toggleVaAccordion('${safeId}')"
+                      class="px-2.5 py-1 rounded-md text-[11px] font-bold border transition cursor-pointer ${
+                        isExpanded
+                          ? "bg-teal-700 text-white border-teal-500"
+                          : "bg-slate-900 hover:bg-slate-800 text-teal-300 border-slate-700"
+                      }">
+                ${isExpanded ? "− Close" : "+ Align"}
+              </button>
+              ${
+                isHiddenVa
+                  ? `<button type="button" onclick="window.unhideSingleVa('${safeId}')"
+                             title="Restore VA to visible list"
+                             class="px-2 py-1 rounded-md text-[10px] font-bold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-700 cursor-pointer">
+                       Unhide
+                     </button>`
+                  : `<button type="button" onclick="window.hideSingleVa('${safeId}')"
+                             title="Hide VA from Overview"
+                             class="px-2 py-1 rounded-md text-[10px] font-semibold bg-slate-900 hover:bg-rose-950/70 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-800 cursor-pointer">
+                       Hide
+                     </button>`
+              }
+            </div>
           </td>
           <td class="px-3 py-2.5 font-medium whitespace-nowrap relative group cursor-help">
             <div class="flex items-center gap-1.5">
@@ -404,6 +570,8 @@ function renderDashboard() {
                 ${escapeHtml(v.va)}
               </a>
               ${isProb ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono">PROB</span>' : ""}
+              ${isHiddenVa ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 border border-amber-700/60 font-mono">HIDDEN</span>' : ""}
+              ${staleNoteBadge}
             </div>
 
             <!-- Floating Hover Card with Current Date Activity Rate -->
@@ -578,11 +746,14 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
   const hrsIdx = headers.findIndex((h) => /hours/i.test(h));
   const notesIdx = headers.findIndex((h) => h.toLowerCase() === "notes");
   const flagIdx = headers.findIndex((h) => h.toLowerCase() === "flag");
+  const redFlagIdx = headers.findIndex((h) => /red\s*flag\s*comms/i.test(h));
 
   const notesKey = notesIdx !== -1 ? cleanHeaders[notesIdx] : "";
   const notesCol = notesIdx !== -1 ? colIndices[notesIdx] : 0;
   const flagKey = flagIdx !== -1 ? cleanHeaders[flagIdx] : "";
   const flagCol = flagIdx !== -1 ? colIndices[flagIdx] : 0;
+  const redFlagKey = redFlagIdx !== -1 ? cleanHeaders[redFlagIdx] : "RED_FLAG_COMMS";
+  const redFlagCol = redFlagIdx !== -1 ? colIndices[redFlagIdx] : 7; // Column G default
 
   let shiftCardHtml = `<p class="text-xs text-slate-500 p-2">No shift log rows found.</p>`;
 
@@ -597,6 +768,7 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
 
     const rawNotesHeader = notesIdx !== -1 ? headers[notesIdx] : "Notes";
     const rawFlagHeader = flagIdx !== -1 ? headers[flagIdx] : "Flag";
+    const rawRedFlagHeader = redFlagIdx !== -1 ? headers[redFlagIdx] : "RED FLAG COMMS";
 
     const serverNote =
       row[notesKey] !== undefined
@@ -612,12 +784,18 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
         ? row[rawFlagHeader]
         : row[rawFlagHeader.toLowerCase()] || row["flag"] || "";
 
+    const amKey = `${tabKey}_row_${row._sheetRow}`;
+    const serverRedFlag =
+      row[redFlagKey] !== undefined
+        ? row[redFlagKey]
+        : row[rawRedFlagHeader] !== undefined
+        ? row[rawRedFlagHeader]
+        : siteAmComms[amKey] || "";
+
     const effectiveNote = rDraft.notesDirty ? rDraft.notesVal : serverNote;
     const effectiveFlag = rDraft.flagDirty ? rDraft.flagVal : serverFlag;
+    const effectiveAm = rDraft.amDirty ? rDraft.amVal : serverRedFlag;
     const upperFlag = String(effectiveFlag).trim().toUpperCase();
-
-    const amKey = `${tabKey}_row_${row._sheetRow}`;
-    const effectiveAm = rDraft.amDirty ? rDraft.amVal : siteAmComms[amKey] || "";
     const isAmOpen = Boolean(expandedAmRows[amKey]);
 
     shiftCardHtml = `
@@ -681,11 +859,13 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
                 ${
                   isAmOpen
                     ? `<div class="bg-rose-950/25 border border-rose-900/60 rounded-lg p-2 space-y-1">
-                        <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Site-Only)</div>
+                        <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Syncs to Column G)</div>
                         <textarea rows="2"
-                                  oninput="window.stageOvAmEdit('${safeTabKey}', ${row._sheetRow}, '${amKey}', this.value)"
-                                  placeholder="Log client escalations or AM follow-ups..."
-                                  class="w-full bg-slate-950 border border-rose-900/70 rounded p-1.5 text-xs text-rose-100">${escapeHtml(effectiveAm)}</textarea>
+                                  oninput="window.stageOvAmEdit('${safeTabKey}', '${tabObj.tabName}', ${row._sheetRow}, ${redFlagCol}, '${amKey}', this.value)"
+                                  placeholder="Log client escalations or AM follow-ups (pushes to Col G)..."
+                                  class="w-full bg-slate-950 border ${
+                                    rDraft.amDirty ? "border-amber-500/80" : "border-rose-900/70"
+                                  } rounded p-1.5 text-xs text-rose-100">${escapeHtml(effectiveAm)}</textarea>
                       </div>`
                     : ""
                 }
@@ -894,8 +1074,10 @@ window.stageOvFlagEdit = (tabKey, tabName, sheetRow, colIndex, val, selectEl) =>
   }
 };
 
-window.stageOvAmEdit = (tabKey, sheetRow, amKey, val) => {
+window.stageOvAmEdit = (tabKey, tabName, sheetRow, redFlagCol, amKey, val) => {
   stageOverviewRowDraft(tabKey, sheetRow, {
+    tabName,
+    redFlagCol: redFlagCol || 7,
     amKey,
     amVal: val,
     amDirty: true
@@ -945,6 +1127,17 @@ window.saveAllOverviewLogDrafts = async (tabKey) => {
             targetRow["Flag"] = entry.flagVal;
             targetRow["flag"] = entry.flagVal;
           }
+          if (entry.amDirty) {
+            const targetCol = entry.redFlagCol || 7;
+            if (tabObj.cleanHeaders && tabObj.colIndices) {
+              const rfIdx = tabObj.colIndices.indexOf(targetCol);
+              if (rfIdx !== -1) {
+                targetRow[tabObj.cleanHeaders[rfIdx]] = entry.amVal;
+              }
+            }
+            targetRow["RED_FLAG_COMMS"] = entry.amVal;
+            targetRow["RED FLAG COMMS"] = entry.amVal;
+          }
         }
       }
 
@@ -976,8 +1169,24 @@ window.saveAllOverviewLogDrafts = async (tabKey) => {
         );
       }
 
-      if (entry.amDirty && entry.amKey) {
-        amUpdates[entry.amKey] = entry.amVal;
+      if (entry.amDirty) {
+        const targetCol = entry.redFlagCol || 7; // Column G (RED FLAG COMMS)
+        if (entry.tabName) {
+          promises.push(
+            Promise.race([
+              updateSheetCell({
+                tabName: entry.tabName,
+                sheetRow: entry.sheetRow,
+                colIndex: targetCol,
+                value: entry.amVal
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Sheet update timeout")), 10000))
+            ])
+          );
+        }
+        if (entry.amKey) {
+          amUpdates[entry.amKey] = entry.amVal;
+        }
       }
 
       await Promise.all(promises);

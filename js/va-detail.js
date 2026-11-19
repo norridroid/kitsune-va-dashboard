@@ -4,19 +4,20 @@ import {
   escapeHtml,
   parsePastedListItems,
   getProbationEndDate,
-  formatConditionalActivityBadge
+  formatConditionalActivityBadge,
+  deriveScheduleFromTab
 } from "./schedule.js";
 
 renderTopNav("va-detail");
 
 let selectedTabData = {};
 let allVas = {};
+let vaOrderList = [];
 let hubstaffLiveRows = [];
 let siteProfiles = {};
 let siteGoals = {};
 let siteAmComms = {};
 let activeWeekKey = "week_1";
-let isSowDrawerOpen = false;
 let isDossierEditing = false;
 let expandedAmRows = {};
 let expandedDateAlignRows = {};
@@ -29,6 +30,21 @@ let isSavingLogs = false;
 
 // Tracks optimistic schedule saves so incoming Firebase snapshots don't revert End Time mid-sync
 let pendingScheduleLock = {};
+
+const CUSTOM_PILL_ORDER_KEY = "kitsune_custom_va_pill_order";
+let customPillOrder = [];
+try {
+  const savedOrder = JSON.parse(localStorage.getItem(CUSTOM_PILL_ORDER_KEY) || "[]");
+  if (Array.isArray(savedOrder)) customPillOrder = savedOrder;
+} catch (_) {}
+
+function saveCustomPillOrder() {
+  try {
+    localStorage.setItem(CUSTOM_PILL_ORDER_KEY, JSON.stringify(customPillOrder));
+  } catch (_) {}
+}
+
+let draggedPillKey = null;
 
 const GLOBAL_DATE_RANGE_KEY = "kitsune_global_log_date_range";
 let savedDateRange = {};
@@ -64,11 +80,20 @@ function getInitialTarget() {
 const initialTarget = getInitialTarget();
 let activeKey = "";
 
+const resetOrderBtn = document.getElementById("reset-pill-order-btn");
+if (resetOrderBtn) {
+  resetOrderBtn.addEventListener("click", () => {
+    customPillOrder = [];
+    saveCustomPillOrder();
+    populateVaPills();
+    showToast("✓ Reset VA pill order to match Overview schedule order");
+  });
+}
+
 subscribeCached("kitsuneDashboard", "kitsune_full_detail_cache", (data) => {
   if (!data) return;
   const incomingTabs = data.selectedTabData || {};
 
-  // Preserve optimistic schedule edits if a save just happened within the last 12 seconds
   const now = Date.now();
   Object.keys(pendingScheduleLock).forEach((k) => {
     const lock = pendingScheduleLock[k];
@@ -82,6 +107,7 @@ subscribeCached("kitsuneDashboard", "kitsune_full_detail_cache", (data) => {
 
   selectedTabData = incomingTabs;
   allVas = data.vas || {};
+  vaOrderList = Array.isArray(data.vaOrder) ? data.vaOrder : Object.keys(allVas);
 
   const liveData = data.hubstaffLive || {};
   hubstaffLiveRows = Array.isArray(liveData.rows)
@@ -172,14 +198,51 @@ function resolveRequestedKey() {
     return;
   }
 
-  activeKey = keys[0];
+  const orderedKeys = getOrderedTabKeys();
+  activeKey = orderedKeys[0] || keys[0];
+}
+
+function getOrderedTabKeys() {
+  const keys = Object.keys(selectedTabData);
+  if (!keys.length) return [];
+
+  const metaByKey = {};
+  keys.forEach((k) => {
+    const t = selectedTabData[k];
+    const summaryVa = resolveSummaryVaRecordForTab(k, t);
+    const vaId = summaryVa ? summaryVa.id : "";
+    const sheetIndex = vaId && vaOrderList.indexOf(vaId) !== -1 ? vaOrderList.indexOf(vaId) : 9999;
+    const schedInfo = summaryVa
+      ? deriveScheduleFromTab(summaryVa, selectedTabData)
+      : deriveScheduleFromTab({ id: k, va: t.tabName, scheduleRow: t.scheduleRow }, selectedTabData);
+
+    metaByKey[k] = {
+      startMinutes: schedInfo && typeof schedInfo.startMinutes === "number" ? schedInfo.startMinutes : 99999,
+      sheetIndex,
+      label: String(t.tabName || k)
+    };
+  });
+
+  const defaultSorted = [...keys].sort((a, b) => {
+    const ma = metaByKey[a];
+    const mb = metaByKey[b];
+    return ma.startMinutes - mb.startMinutes || ma.sheetIndex - mb.sheetIndex || ma.label.localeCompare(mb.label);
+  });
+
+  if (!customPillOrder.length) return defaultSorted;
+
+  const customIndexMap = new Map(customPillOrder.map((k, idx) => [k, idx]));
+  return [...defaultSorted].sort((a, b) => {
+    const ia = customIndexMap.has(a) ? customIndexMap.get(a) : 9999 + defaultSorted.indexOf(a);
+    const ib = customIndexMap.has(b) ? customIndexMap.get(b) : 9999 + defaultSorted.indexOf(b);
+    return ia - ib;
+  });
 }
 
 window.selectVaTabPill = (key) => {
   if (!key || !selectedTabData[key]) return;
   activeKey = key;
   isDossierEditing = false;
-  isSowDrawerOpen = false;
   expandedDateAlignRows = {};
   const tabObj = selectedTabData[activeKey];
   const nameQuery = tabObj ? `&name=${encodeURIComponent(tabObj.fullName || tabObj.tabName)}` : "";
@@ -188,18 +251,148 @@ window.selectVaTabPill = (key) => {
   renderAll();
 };
 
-document.getElementById("toggle-sow-drawer-btn").addEventListener("click", () => {
-  isSowDrawerOpen = !isSowDrawerOpen;
-  renderSowAlignment();
-});
+window.handlePillDragStart = (e, key) => {
+  draggedPillKey = key;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", key);
+  }
+  if (e.currentTarget) e.currentTarget.classList.add("opacity-50");
+};
+
+window.handlePillDragEnd = (e) => {
+  draggedPillKey = null;
+  if (e.currentTarget) e.currentTarget.classList.remove("opacity-50");
+  document.querySelectorAll("#va-pill-bar button").forEach((btn) => {
+    btn.classList.remove("ring-2", "ring-amber-400", "scale-105");
+  });
+};
+
+window.handlePillDragOver = (e) => {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  if (e.currentTarget) e.currentTarget.classList.add("ring-2", "ring-amber-400");
+};
+
+window.handlePillDragLeave = (e) => {
+  if (e.currentTarget) e.currentTarget.classList.remove("ring-2", "ring-amber-400");
+};
+
+window.handlePillDrop = (e, targetKey) => {
+  e.preventDefault();
+  if (e.currentTarget) e.currentTarget.classList.remove("ring-2", "ring-amber-400");
+
+  const sourceKey = draggedPillKey || (e.dataTransfer && e.dataTransfer.getData("text/plain"));
+  if (!sourceKey || sourceKey === targetKey) return;
+
+  const currentOrder = getOrderedTabKeys();
+  const fromIdx = currentOrder.indexOf(sourceKey);
+  const toIdx = currentOrder.indexOf(targetKey);
+  if (fromIdx === -1 || toIdx === -1) return;
+
+  currentOrder.splice(fromIdx, 1);
+  currentOrder.splice(toIdx, 0, sourceKey);
+
+  customPillOrder = currentOrder;
+  saveCustomPillOrder();
+  populateVaPills();
+};
+
+function getNoteStalenessInfo(tabObj) {
+  if (!tabObj || !Array.isArray(tabObj.rows) || !tabObj.rows.length) return null;
+
+  const headers = tabObj.headers || [];
+  const cleanHeaders = tabObj.cleanHeaders || [];
+  const dateIdx = headers.findIndex((h, idx) => idx === 0 || /week|date/i.test(h));
+  const dateKey = dateIdx !== -1 ? cleanHeaders[dateIdx] : cleanHeaders[0];
+  const notesIdx = headers.findIndex((h) => h.toLowerCase() === "notes");
+  const notesKey = notesIdx !== -1 ? cleanHeaders[notesIdx] : "Notes";
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayIso = toLocalIsoDate(today);
+
+  let latestNoteIso = "";
+  let latestNoteDateLabel = "";
+
+  tabObj.rows.forEach((r) => {
+    const rawDate = String(r[dateKey] || "").trim();
+    const iso = parseRowDateToIso(rawDate);
+    if (!iso || iso > todayIso) return;
+
+    const noteVal = String(r[notesKey] !== undefined ? r[notesKey] : r.Notes || r.notes || "").trim();
+    if (noteVal.length > 0) {
+      if (!latestNoteIso || iso > latestNoteIso) {
+        latestNoteIso = iso;
+        latestNoteDateLabel = rawDate;
+      }
+    }
+  });
+
+  if (!latestNoteIso) {
+    return {
+      daysAgo: 99,
+      label: "No notes logged (3d+)",
+      shortBadge: "No notes",
+      severity: "danger"
+    };
+  }
+
+  const lastDate = new Date(`${latestNoteIso}T00:00:00`);
+  const diffDays = Math.round((today.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays <= 0) return null;
+
+  if (diffDays === 1) {
+    return {
+      daysAgo: 1,
+      lastDateLabel: latestNoteDateLabel,
+      label: `No note since Yesterday (${latestNoteDateLabel})`,
+      shortBadge: "1d stale",
+      severity: "warn"
+    };
+  }
+
+  if (diffDays === 2) {
+    return {
+      daysAgo: 2,
+      lastDateLabel: latestNoteDateLabel,
+      label: `No note for 2 days (Last: ${latestNoteDateLabel})`,
+      shortBadge: "2d stale",
+      severity: "orange"
+    };
+  }
+
+  return {
+    daysAgo: diffDays,
+    lastDateLabel: latestNoteDateLabel,
+    label: `No note for ${diffDays} days (Last: ${latestNoteDateLabel})`,
+    shortBadge: `${diffDays}d stale`,
+    severity: "danger"
+  };
+}
+
+function renderStalenessBadgeHtml(staleInfo) {
+  if (!staleInfo) return "";
+  if (staleInfo.severity === "warn") {
+    return `<span title="${escapeHtml(staleInfo.label)}" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/90 text-amber-300 border border-amber-700">⚠️ ${escapeHtml(staleInfo.label)}</span>`;
+  }
+  if (staleInfo.severity === "orange") {
+    return `<span title="${escapeHtml(staleInfo.label)}" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-950/90 text-orange-300 border border-orange-700">🟠 ${escapeHtml(staleInfo.label)}</span>`;
+  }
+  return `<span title="${escapeHtml(staleInfo.label)}" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-700 animate-pulse">🚨 ${escapeHtml(staleInfo.label)}</span>`;
+}
 
 function populateVaPills() {
   const pillBarEl = document.getElementById("va-pill-bar");
   if (!pillBarEl) return;
 
-  const keys = Object.keys(selectedTabData).sort((a, b) =>
-    String(selectedTabData[a].tabName || a).localeCompare(String(selectedTabData[b].tabName || b))
-  );
+  if (resetOrderBtn) {
+    if (customPillOrder.length > 0) resetOrderBtn.classList.remove("hidden");
+    else resetOrderBtn.classList.add("hidden");
+  }
+
+  const keys = getOrderedTabKeys();
 
   if (!keys.length) {
     pillBarEl.innerHTML = `<span class="text-xs text-slate-400">No tabs synced yet — open <a href="tabs.html" class="text-teal-400 underline">Select Tabs</a></span>`;
@@ -210,19 +403,36 @@ function populateVaPills() {
     .map((k) => {
       const t = selectedTabData[k];
       const isSelected = k === activeKey;
-      const summaryVa = resolveSummaryVaRecord(t);
+      const summaryVa = resolveSummaryVaRecordForTab(k, t);
       const isOnline = Boolean(summaryVa && String(summaryVa.statusNow || "").toLowerCase().includes("logged in"));
+      const staleInfo = getNoteStalenessInfo(t);
       const safeKey = String(k).replace(/'/g, "\\'");
-      const titleAttr =
+
+      const baseTitle =
         t.fullName && t.fullName.toLowerCase() !== t.tabName.toLowerCase()
           ? `${t.tabName} (${t.fullName})`
           : t.tabName;
+      const titleAttr = staleInfo ? `${baseTitle} — ${staleInfo.label}` : baseTitle;
+
+      const stalePillTag = staleInfo
+        ? staleInfo.severity === "warn"
+          ? `<span class="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-950 text-amber-300 border border-amber-700 font-mono">1d</span>`
+          : staleInfo.severity === "orange"
+          ? `<span class="text-[9px] px-1.5 py-0.2 rounded-full bg-orange-950 text-orange-300 border border-orange-700 font-mono">2d</span>`
+          : `<span class="text-[9px] px-1.5 py-0.2 rounded-full bg-rose-950 text-rose-300 border border-rose-700 font-mono">${staleInfo.daysAgo >= 99 ? "3d+" : `${staleInfo.daysAgo}d`}</span>`
+        : "";
 
       return `
         <button type="button"
+                draggable="true"
+                ondragstart="window.handlePillDragStart(event, '${safeKey}')"
+                ondragend="window.handlePillDragEnd(event)"
+                ondragover="window.handlePillDragOver(event)"
+                ondragleave="window.handlePillDragLeave(event)"
+                ondrop="window.handlePillDrop(event, '${safeKey}')"
                 onclick="window.selectVaTabPill('${safeKey}')"
                 title="${escapeHtml(titleAttr)}"
-                class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-grab active:cursor-grabbing ${
                   isSelected
                     ? "bg-sky-950/90 text-white border-sky-400 ring-2 ring-sky-500/40 shadow-md"
                     : "bg-slate-950/90 hover:bg-slate-900 text-slate-200 border-slate-800 hover:border-slate-600"
@@ -231,6 +441,7 @@ function populateVaPills() {
             isOnline ? "bg-emerald-400 shadow-[0_0_6px_#34d399]" : "bg-sky-400"
           }"></span>
           <span>${escapeHtml(t.tabName)}</span>
+          ${stalePillTag}
         </button>
       `;
     })
@@ -244,13 +455,6 @@ function showToast(msg) {
   setTimeout(() => toast.classList.add("hidden"), 3500);
 }
 
-/**
- * Recalibrated Row 2 Cell Parser:
- * - A2 (index 0): Shift Type
- * - B2 (index 1): Start Time
- * - C2 (index 2): End Time
- * - G2 (index 6): Account Brief URL
- */
 function parseScheduleFields(tabObj) {
   const row2 = Array.isArray(tabObj.scheduleRow) ? tabObj.scheduleRow : [];
   const a2 = String(row2[0] || "").trim();
@@ -297,7 +501,7 @@ function parseScheduleFields(tabObj) {
   };
 }
 
-function resolveSummaryVaRecord(tabObj) {
+function resolveSummaryVaRecordForTab(tabKey, tabObj) {
   if (!tabObj) return null;
   const clean = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
   const fn = clean(tabObj.fullName);
@@ -309,7 +513,7 @@ function resolveSummaryVaRecord(tabObj) {
     if (exactFull) return exactFull;
   }
 
-  let match = list.find((v) => v.matchedTabKey === activeKey || clean(v.va) === tn);
+  let match = list.find((v) => v.matchedTabKey === tabKey || clean(v.va) === tn);
   if (match) return match;
 
   const tnWords = tn.split(" ").filter(Boolean);
@@ -335,6 +539,10 @@ function resolveSummaryVaRecord(tabObj) {
   }
 
   return null;
+}
+
+function resolveSummaryVaRecord(tabObj) {
+  return resolveSummaryVaRecordForTab(activeKey, tabObj);
 }
 
 function resolveFullVaName(tabObj) {
@@ -415,7 +623,6 @@ window.autoResizeNote = (el) => {
 
 function renderAll() {
   renderDossierCard();
-  renderSowAlignment();
   renderActiveTab();
 }
 
@@ -435,10 +642,11 @@ function renderDossierCard() {
   const isProb = tier === "prob";
   const probEnd = getProbationEndDate(profile.startDate) || "—";
   const shiftRange = sched.startTime && sched.endTime ? `${sched.startTime} - ${sched.endTime}` : sched.startTime || "—";
+  const staleInfo = getNoteStalenessInfo(tabObj);
 
   if (!isDossierEditing) {
     section.innerHTML = `
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+      <div class="bg-slate-900 border ${staleInfo && staleInfo.severity === "danger" ? "border-rose-800/80" : "border-slate-800"} rounded-2xl p-5 shadow-xl space-y-4">
         <div class="flex flex-wrap justify-between items-start border-b border-slate-800/80 pb-3 gap-2">
           <div>
             <div class="flex flex-wrap items-center gap-2.5">
@@ -453,6 +661,7 @@ function renderDossierCard() {
                   ? "bg-amber-950 text-amber-300 border-amber-800"
                   : "bg-sky-950 text-sky-300 border-sky-800"
               }">${isProb ? "PROBATIONARY" : "REGULAR"}</span>
+              ${renderStalenessBadgeHtml(staleInfo)}
             </div>
             <div class="text-xs text-slate-500 font-mono mt-1">
               Sheet Tab: <strong class="text-slate-300">${escapeHtml(tabObj.tabName)}</strong> • Site-Only Profile Metadata
@@ -730,10 +939,7 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
     .join("");
 
   const rowArg = targetSheetRow !== null ? targetSheetRow : "null";
-  const closeHandler =
-    targetSheetRow !== null
-      ? `window.toggleDateAlignRow(${targetSheetRow})`
-      : `window.toggleSowDrawer()`;
+  const closeHandler = `window.toggleDateAlignRow(${targetSheetRow})`;
 
   return `
     <div class="bg-slate-900 border ${hasUnsaved ? "border-amber-600/70" : "border-blue-900/70"} rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4 w-full max-w-full box-border">
@@ -811,33 +1017,6 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
   `;
 }
 
-function renderSowAlignment() {
-  const section = document.getElementById("sow-alignment-section");
-  const toggleBtn = document.getElementById("toggle-sow-drawer-btn");
-  const tabObj = selectedTabData[activeKey];
-
-  if (!tabObj) {
-    section.classList.add("hidden");
-    toggleBtn.classList.add("hidden");
-    return;
-  }
-
-  toggleBtn.classList.remove("hidden");
-  const profile = siteProfiles[activeKey] || {};
-  const isProb = profile.employmentTier === "prob";
-  toggleBtn.textContent = isSowDrawerOpen
-    ? `▲ Hide ${isProb ? "Daily Tasks" : "Weekly SOW"}`
-    : `🎯 ${isProb ? "Daily Task Alignment" : "Weekly SOW Alignment"}`;
-
-  if (!isSowDrawerOpen) {
-    section.classList.add("hidden");
-    return;
-  }
-
-  section.classList.remove("hidden");
-  section.innerHTML = buildAlignmentDrawerHtml();
-}
-
 function markSowDirtyIndicator() {
   const dKey = getDraftKey(activeKey, activeWeekKey);
   sowDirty[dKey] = true;
@@ -847,11 +1026,6 @@ function markSowDirtyIndicator() {
   });
 }
 
-window.toggleSowDrawer = () => {
-  isSowDrawerOpen = !isSowDrawerOpen;
-  renderSowAlignment();
-};
-
 window.toggleDateAlignRow = (sheetRow) => {
   const key = `${activeKey}__${sheetRow}`;
   expandedDateAlignRows[key] = !expandedDateAlignRows[key];
@@ -860,7 +1034,6 @@ window.toggleDateAlignRow = (sheetRow) => {
 
 window.setSowWeek = (wk) => {
   activeWeekKey = wk;
-  renderSowAlignment();
   renderActiveTab();
 };
 
@@ -869,7 +1042,6 @@ window.updateGoalItem = (idx, field, val, skipRerender = false) => {
   draft.focuses[idx] = { ...draft.focuses[idx], [field]: val };
   markSowDirtyIndicator();
   if (!skipRerender) {
-    renderSowAlignment();
     renderActiveTab();
   }
 };
@@ -878,7 +1050,6 @@ window.addGoalItem = () => {
   const draft = ensureLocalDraft();
   draft.focuses.push({ id: `f_${Date.now()}`, text: "", achieved: false, outcomeNotes: "" });
   markSowDirtyIndicator();
-  renderSowAlignment();
   renderActiveTab();
 };
 
@@ -887,7 +1058,6 @@ window.updateGoalAdditionalNotes = (val, skipRerender = false) => {
   draft.additionalNotes = val;
   markSowDirtyIndicator();
   if (!skipRerender) {
-    renderSowAlignment();
     renderActiveTab();
   }
 };
@@ -902,7 +1072,6 @@ window.saveSowDraft = async () => {
   delete sowDrafts[dKey];
   delete sowDirty[dKey];
   showToast(`✓ Saved SOW / Daily Tasks!`);
-  renderSowAlignment();
   renderActiveTab();
 };
 
@@ -922,7 +1091,6 @@ window.handleMultiPasteGoals = (e, startIdx) => {
   });
 
   markSowDirtyIndicator();
-  renderSowAlignment();
   renderActiveTab();
   showToast(`✓ Auto-split ${items.length} items — click Save SOW when ready!`);
 };
@@ -1063,8 +1231,10 @@ window.stageFlagEdit = (tabName, sheetRow, colIndex, value, selectEl) => {
   }
 };
 
-window.stageAmCommsEdit = (sheetRow, amKey, value) => {
+window.stageAmCommsEdit = (tabName, sheetRow, redFlagCol, amKey, value) => {
   stageRowDraft(activeKey, sheetRow, {
+    tabName,
+    redFlagCol: redFlagCol || 7,
     amKey,
     amVal: value,
     amDirty: true
@@ -1107,6 +1277,17 @@ window.saveAllLogDrafts = async () => {
             targetRow["Flag"] = entry.flagVal;
             targetRow["flag"] = entry.flagVal;
           }
+          if (entry.amDirty) {
+            const targetCol = entry.redFlagCol || 7;
+            if (tabObj.cleanHeaders && tabObj.colIndices) {
+              const rfIdx = tabObj.colIndices.indexOf(targetCol);
+              if (rfIdx !== -1) {
+                targetRow[tabObj.cleanHeaders[rfIdx]] = entry.amVal;
+              }
+            }
+            targetRow["RED_FLAG_COMMS"] = entry.amVal;
+            targetRow["RED FLAG COMMS"] = entry.amVal;
+          }
         }
       }
 
@@ -1138,8 +1319,24 @@ window.saveAllLogDrafts = async () => {
         );
       }
 
-      if (entry.amDirty && entry.amKey) {
-        amUpdates[entry.amKey] = entry.amVal;
+      if (entry.amDirty) {
+        const targetCol = entry.redFlagCol || 7; // Column G (RED FLAG COMMS)
+        if (entry.tabName) {
+          promises.push(
+            Promise.race([
+              updateSheetCell({
+                tabName: entry.tabName,
+                sheetRow: entry.sheetRow,
+                colIndex: targetCol,
+                value: entry.amVal
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Sheet update timeout")), 10000))
+            ])
+          );
+        }
+        if (entry.amKey) {
+          amUpdates[entry.amKey] = entry.amVal;
+        }
       }
 
       await Promise.all(promises);
@@ -1158,7 +1355,8 @@ window.saveAllLogDrafts = async () => {
   } finally {
     isSavingLogs = false;
     updateLogSaveButtonsUI();
-    renderActiveTab();
+    populateVaPills();
+    renderAll();
   }
 };
 
@@ -1171,7 +1369,6 @@ function parseRowDateToIso(rawStr) {
   if (!s) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
-  // Handle "12 Nov 26" or "18 Nov 2026"
   const dmyMatch = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{2,4})$/);
   if (dmyMatch) {
     const day = dmyMatch[1];
@@ -1296,6 +1493,16 @@ function renderActiveTab() {
   const dateColIdx = headers.findIndex((h, idx) => idx === 0 || /week|date/i.test(h));
   const dateKey = dateColIdx !== -1 ? cleanHeaders[dateColIdx] : cleanHeaders[0];
 
+  const redFlagIdx = headers.findIndex((h) => /red\s*flag\s*comms/i.test(h));
+  const redFlagKey = redFlagIdx !== -1 ? cleanHeaders[redFlagIdx] : "RED_FLAG_COMMS";
+  const redFlagCol = redFlagIdx !== -1 ? colIndices[redFlagIdx] : 7; // Column G default
+  const rawRedFlagHeader = redFlagIdx !== -1 ? headers[redFlagIdx] : "RED FLAG COMMS";
+
+  // Build visible column list (hide duplicate RED FLAG COMMS column since it's edited in AM Comms drawer)
+  const visibleColumnIndices = headers
+    .map((h, idx) => ({ h, idx }))
+    .filter(({ h }) => !/red\s*flag\s*comms/i.test(h));
+
   const todayIso = toLocalIsoDate(new Date());
   const yestDate = new Date();
   yestDate.setDate(yestDate.getDate() - 1);
@@ -1304,7 +1511,6 @@ function renderActiveTab() {
   const isTodaySelected = logDateFrom === todayIso && logDateTo === todayIso;
   const isYesterdaySelected = logDateFrom === yesterdayIso && logDateTo === yesterdayIso;
 
-  // Filter by date range and sort newest date first (top = latest)
   const rows = allRows
     .filter((row) => {
       if (!logDateFrom && !logDateTo) return true;
@@ -1389,7 +1595,7 @@ function renderActiveTab() {
   const thead = `
     <thead class="bg-slate-800 text-xs uppercase text-slate-300">
       <tr>
-        ${headers.map((h) => `<th class="p-3 text-left">${escapeHtml(h)}</th>`).join("")}
+        ${visibleColumnIndices.map(({ h }) => `<th class="p-3 text-left">${escapeHtml(h)}</th>`).join("")}
       </tr>
     </thead>
   `;
@@ -1409,8 +1615,8 @@ function renderActiveTab() {
             : liveActivity7d;
           const dayTrackedStr = dayWorkSession ? dayWorkSession.totalDuration : liveAvgHrs;
 
-          const cells = headers
-            .map((rawH, idx) => {
+          const cells = visibleColumnIndices
+            .map(({ h: rawH, idx }) => {
               const exactSheetCol = colIndices[idx] || idx + 1;
               const primaryKey = cleanHeaders[idx];
               const serverVal =
@@ -1491,7 +1697,14 @@ function renderActiveTab() {
               if (lowerHeader === "notes") {
                 const effectiveNote = rowDraft.notesDirty ? rowDraft.notesVal : serverVal;
                 const amKey = `${activeKey}_row_${row._sheetRow}`;
-                const effectiveAmText = rowDraft.amDirty ? rowDraft.amVal : (siteAmComms[amKey] || "");
+                const serverRedFlag =
+                  row[redFlagKey] !== undefined
+                    ? row[redFlagKey]
+                    : row[rawRedFlagHeader] !== undefined
+                    ? row[rawRedFlagHeader]
+                    : siteAmComms[amKey] || "";
+
+                const effectiveAmText = rowDraft.amDirty ? rowDraft.amVal : serverRedFlag;
                 const isAmOpen = Boolean(expandedAmRows[amKey]);
 
                 return `
@@ -1527,11 +1740,13 @@ function renderActiveTab() {
                     ${
                       isAmOpen
                         ? `<div class="bg-rose-950/25 border border-rose-900/60 rounded-lg p-2 space-y-1">
-                            <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Site-Only)</div>
+                            <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Syncs to Column G)</div>
                             <textarea rows="2"
-                                      oninput="window.stageAmCommsEdit(${row._sheetRow}, '${amKey}', this.value)"
-                                      placeholder="Log client escalations or AM follow-ups..."
-                                      class="w-full bg-slate-950 border border-rose-900/70 rounded p-1.5 text-xs text-rose-100 focus:outline-none">${escapeHtml(effectiveAmText)}</textarea>
+                                      oninput="window.stageAmCommsEdit('${tabObj.tabName}', ${row._sheetRow}, ${redFlagCol}, '${amKey}', this.value)"
+                                      placeholder="Log client escalations or AM follow-ups (pushes to Col G)..."
+                                      class="w-full bg-slate-950 border ${
+                                        rowDraft.amDirty ? "border-amber-500/80" : "border-rose-900/70"
+                                      } rounded p-1.5 text-xs text-rose-100 focus:outline-none">${escapeHtml(effectiveAmText)}</textarea>
                           </div>`
                         : ""
                     }
@@ -1545,7 +1760,7 @@ function renderActiveTab() {
 
           const perDateAlignRowHtml = isDateAlignOpen
             ? `<tr class="bg-slate-950/95 border-t border-blue-800/60">
-                <td colspan="${headers.length || 1}" class="p-3 sm:p-4">
+                <td colspan="${visibleColumnIndices.length || 1}" class="p-3 sm:p-4">
                   ${buildAlignmentDrawerHtml({
                     targetSheetRow: row._sheetRow,
                     targetDateLabel: dateValForRow || `Row ${row._sheetRow}`
@@ -1560,7 +1775,7 @@ function renderActiveTab() {
           `;
         })
         .join("")
-    : `<tr><td colspan="${headers.length || 1}" class="p-6 text-center text-slate-400 text-xs">No log rows match the selected date range.</td></tr>`;
+    : `<tr><td colspan="${visibleColumnIndices.length || 1}" class="p-6 text-center text-slate-400 text-xs">No log rows match the selected date range.</td></tr>`;
 
   const bottomSaveBarHtml = `
     <div class="flex items-center justify-end px-4 py-3 bg-slate-900/95 border-t border-slate-800">
