@@ -8,6 +8,6 @@
   },
   "devDependencies": {
     "serve": "^14.2.8",
-    "wrangler": "^3.114.17"
+    "wrangler": "^4.165.0"
   }
 }

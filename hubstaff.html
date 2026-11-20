@@ -11,7 +11,7 @@
   <header class="bg-teal-950 border-b border-teal-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold text-white">Hubstaff Live View</h1>
-      <p id="hs-sync-status" class="text-xs text-teal-300">Auto-refreshes every 15 minutes • View-only (does not write to Google Sheets)</p>
+      <p id="hs-sync-status" class="text-xs text-teal-300">Auto-refreshes every 10 minutes • View-only (does not write to Google Sheets)</p>
     </div>
     <nav id="main-nav" class="flex flex-wrap gap-2"></nav>
   </header>
@@ -124,20 +124,57 @@
       <!-- 6-Column Aggregated Work Sessions Table (Selected Date Only) -->
       <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
         <table class="w-full text-left border-collapse text-xs">
-          <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider">
+          <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider select-none">
             <tr>
-              <th class="px-4 py-3">Member</th>
-              <th class="px-3 py-3 text-center">Started</th>
-              <th class="px-3 py-3 text-center">Stopped</th>
-              <th class="px-3 py-3 text-center">Total Duration</th>
-              <th class="px-3 py-3 text-center">Avg Activity</th>
-              <th class="px-3 py-3 text-center">Sessions</th>
+              <th data-hs-sort="member" class="hs-sort-th px-4 py-3 cursor-pointer hover:text-white">Member <span class="hs-sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-hs-sort="started" class="hs-sort-th px-3 py-3 text-center cursor-pointer hover:text-white">Started <span class="hs-sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-hs-sort="stopped" class="hs-sort-th px-3 py-3 text-center cursor-pointer hover:text-white">Stopped <span class="hs-sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-hs-sort="duration" class="hs-sort-th px-3 py-3 text-center cursor-pointer hover:text-white">Total Duration <span class="hs-sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-hs-sort="activity" class="hs-sort-th px-3 py-3 text-center cursor-pointer hover:text-white">Avg Activity <span class="hs-sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-hs-sort="sessions" class="hs-sort-th px-3 py-3 text-center cursor-pointer hover:text-white">Sessions <span class="hs-sort-ind text-slate-500 ml-1">⇅</span></th>
             </tr>
           </thead>
           <tbody id="hs-tbody" class="divide-y divide-slate-800/80">
             <tr><td colspan="6" class="p-6 text-center text-slate-500">Waiting for Hubstaff sync...</td></tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Approved Leaves (This Month & Upcoming Months) displayed inside Work Sessions -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <div class="px-4 py-3 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-emerald-300 uppercase tracking-wider text-[11px]">🌴 Approved Leaves (This Month &amp; Upcoming)</span>
+            <span id="ws-approved-count-pill" class="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-mono">0</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <input id="ws-to-search" type="text" placeholder="Filter member or reason..."
+                   class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-100 focus:border-teal-500 focus:outline-none" />
+            <select id="ws-to-policy-filter"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:border-teal-500 focus:outline-none">
+              <option value="">All Policies</option>
+            </select>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider select-none">
+              <tr>
+                <th data-sort-col="member" class="to-sort-th px-4 py-3 cursor-pointer hover:text-white whitespace-nowrap">Member <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="policy" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Policy <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="reason" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white w-52">Reason <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="start" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Start <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="end" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">End <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="hours" class="to-sort-th px-3 py-3 text-center cursor-pointer hover:text-white whitespace-nowrap">Hours <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="status" class="to-sort-th px-3 py-3 text-center cursor-pointer hover:text-white whitespace-nowrap">Status <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+                <th data-sort-col="requestedOn" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Requested On <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              </tr>
+            </thead>
+            <tbody id="ws-approved-tbody" class="divide-y divide-slate-800/80">
+              <tr><td colspan="8" class="p-5 text-center text-slate-500">Waiting for Hubstaff Time Off sync...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -147,16 +184,33 @@
     <div id="view-time-off" class="hidden space-y-5">
       <!-- Time Off Controls & Counts Bar -->
       <div class="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div class="flex flex-wrap items-center gap-2.5">
-          <span id="to-active-tab-badge" class="px-2.5 py-1 rounded-full bg-amber-950/80 text-amber-300 border border-amber-700 font-bold">
-            Active View: Submitted
-          </span>
-          <span id="to-counts-summary" class="text-slate-400 font-mono">
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="inline-flex rounded-xl bg-slate-950 border border-slate-800 p-1 gap-1">
+            <button id="to-filter-approved" type="button"
+                    class="px-3 py-1 rounded-lg bg-emerald-700 text-white font-bold text-xs cursor-pointer">
+              Approved (This Month &amp; Upcoming)
+            </button>
+            <button id="to-filter-submitted" type="button"
+                    class="px-3 py-1 rounded-lg text-slate-300 hover:text-white font-semibold text-xs cursor-pointer">
+              Submitted
+            </button>
+            <button id="to-filter-all" type="button"
+                    class="px-3 py-1 rounded-lg text-slate-300 hover:text-white font-semibold text-xs cursor-pointer">
+              All
+            </button>
+          </div>
+          <span id="to-counts-summary" class="text-slate-400 font-mono ml-1">
             Submitted: - • Approved: - • Denied: -
           </span>
         </div>
 
-        <div class="flex flex-wrap items-center gap-3">
+        <div class="flex flex-wrap items-center gap-2.5">
+          <input id="to-search-input" type="text" placeholder="Filter member or reason..."
+                 class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-100 focus:border-teal-500 focus:outline-none" />
+          <select id="to-policy-filter"
+                  class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:border-teal-500 focus:outline-none">
+            <option value="">All Policies</option>
+          </select>
           <label class="inline-flex items-center gap-1.5 cursor-pointer text-slate-300">
             <input id="to-kitsune-only" type="checkbox" checked class="rounded bg-slate-950 border-slate-700 text-teal-500" />
             <span>Kitsune VAs Only</span>
@@ -166,18 +220,18 @@
       </div>
 
       <!-- Time Off Requests Table -->
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
         <table class="w-full text-left border-collapse text-xs">
-          <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider">
+          <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider select-none">
             <tr>
-              <th class="px-4 py-3">Member</th>
-              <th class="px-3 py-3">Policy</th>
-              <th class="px-3 py-3">Reason</th>
-              <th class="px-3 py-3 whitespace-nowrap">Start</th>
-              <th class="px-3 py-3 whitespace-nowrap">End</th>
-              <th class="px-3 py-3 text-center">Hours</th>
-              <th class="px-3 py-3 text-center">Status</th>
-              <th class="px-3 py-3 whitespace-nowrap">Requested On</th>
+              <th data-sort-col="member" class="to-sort-th px-4 py-3 cursor-pointer hover:text-white whitespace-nowrap">Member <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="policy" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Policy <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="reason" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white w-52">Reason <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="start" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Start <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="end" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">End <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="hours" class="to-sort-th px-3 py-3 text-center cursor-pointer hover:text-white whitespace-nowrap">Hours <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="status" class="to-sort-th px-3 py-3 text-center cursor-pointer hover:text-white whitespace-nowrap">Status <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
+              <th data-sort-col="requestedOn" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Requested On <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
             </tr>
           </thead>
           <tbody id="to-tbody" class="divide-y divide-slate-800/80">

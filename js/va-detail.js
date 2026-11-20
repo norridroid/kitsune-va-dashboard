@@ -965,7 +965,7 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
                   class="px-3.5 py-1.5 text-xs font-bold text-white ${
                     hasUnsaved ? "bg-teal-600 hover:bg-teal-500 ring-2 ring-teal-400/50" : "bg-teal-700 hover:bg-teal-600"
                   } rounded-lg shadow cursor-pointer">
-            💾 Save SOW
+            💾 SAVE
           </button>
           <button type="button" onclick="${closeHandler}"
                   class="px-3 py-1.5 text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer">
@@ -987,10 +987,14 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-2.5">${itemsHtml}</div>
 
-      <div>
+      <div class="flex flex-wrap items-center gap-2">
         <button type="button" onclick="window.addGoalItem()"
                 class="text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-950/40 hover:bg-blue-950/70 border border-blue-900/60 px-3 py-1.5 rounded-lg cursor-pointer">
           + Add ${itemLabel}
+        </button>
+        <button type="button" onclick="window.clearGoalNotes()"
+                class="text-xs font-semibold text-amber-300 hover:text-amber-200 bg-amber-950/40 hover:bg-amber-950/70 border border-amber-800/70 px-3 py-1.5 rounded-lg cursor-pointer">
+          🧹 Clear Notes
         </button>
       </div>
 
@@ -1002,15 +1006,10 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
                   class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono leading-relaxed">${escapeHtml(bucket.additionalNotes)}</textarea>
       </div>
 
-      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-        <button type="button" onclick="window.appendGoalsToSheet('sod', ${rowArg})"
+      <div class="flex flex-wrap items-center justify-start gap-2 pt-2 border-t border-slate-800">
+        <button type="button" onclick="window.appendGoalsToSheet(${rowArg})"
                 class="bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow flex items-center gap-1.5 cursor-pointer">
-          <span>☀️ Append SOW (SOD) to ${targetDateLabel ? `${escapeHtml(targetDateLabel)} Note` : "Note Draft"}</span>
-        </button>
-
-        <button type="button" onclick="window.appendGoalsToSheet('eod', ${rowArg})"
-                class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow flex items-center gap-1.5 cursor-pointer">
-          <span>🌙 Append Audit (EOD) to ${targetDateLabel ? `${escapeHtml(targetDateLabel)} Note` : "Note Draft"}</span>
+          <span>Append</span>
         </button>
       </div>
     </div>
@@ -1053,6 +1052,26 @@ window.addGoalItem = () => {
   renderActiveTab();
 };
 
+window.clearGoalNotes = () => {
+  const draft = ensureLocalDraft();
+  const baseThree = draft.focuses.slice(0, 3).map((f) => ({
+    ...f,
+    outcomeNotes: ""
+  }));
+  while (baseThree.length < 3) {
+    baseThree.push({
+      id: `f_${baseThree.length + 1}`,
+      text: "",
+      achieved: false,
+      outcomeNotes: ""
+    });
+  }
+  draft.focuses = baseThree;
+  markSowDirtyIndicator();
+  renderActiveTab();
+  showToast("✓ Cleared task notes and reset to 3 items — click SAVE to keep changes.");
+};
+
 window.updateGoalAdditionalNotes = (val, skipRerender = false) => {
   const draft = ensureLocalDraft();
   draft.additionalNotes = val;
@@ -1092,10 +1111,10 @@ window.handleMultiPasteGoals = (e, startIdx) => {
 
   markSowDirtyIndicator();
   renderActiveTab();
-  showToast(`✓ Auto-split ${items.length} items — click Save SOW when ready!`);
+  showToast(`✓ Auto-split ${items.length} items — click SAVE when ready!`);
 };
 
-window.appendGoalsToSheet = (mode, specificSheetRow = null) => {
+window.appendGoalsToSheet = (specificSheetRow = null) => {
   const tabObj = selectedTabData[activeKey];
   if (!tabObj || !tabObj.rows || !tabObj.rows.length) return;
 
@@ -1114,22 +1133,14 @@ window.appendGoalsToSheet = (mode, specificSheetRow = null) => {
     : [...tabObj.rows].reverse().find((r) => String(r.Clock_in || r.Clock_In || "").trim()) ||
       tabObj.rows[tabObj.rows.length - 1];
 
-  let block = "";
-  if (mode === "sod") {
-    block = `\n📋 [SOD SOW Focuses]\n`;
-    bucket.focuses.forEach((f) => {
-      if (f.text && f.text.trim()) block += `• ${f.text.trim()}\n`;
-    });
-  } else {
-    block = `\n🏁 [EOW Focus Audit]\n`;
-    bucket.focuses.forEach((f) => {
-      if (f.text && f.text.trim()) {
-        block += `• ${f.text.trim()} -> ${f.achieved ? "✓ Achieved" : "✗ Incomplete"}${
-          f.outcomeNotes ? ` (${f.outcomeNotes.trim()})` : ""
-        }\n`;
-      }
-    });
-  }
+  let block = `\n📋 [SOW Alignment]\n`;
+  bucket.focuses.forEach((f) => {
+    if (f.text && f.text.trim()) {
+      block += `• ${f.text.trim()}${f.achieved ? " -> ✓ Achieved" : ""}${
+        f.outcomeNotes && f.outcomeNotes.trim() ? ` (${f.outcomeNotes.trim()})` : ""
+      }\n`;
+    }
+  });
 
   if (bucket.additionalNotes.trim()) {
     block += `\n📝 Additional Notes:\n${bucket.additionalNotes.trim()}\n`;
@@ -1151,7 +1162,7 @@ window.appendGoalsToSheet = (mode, specificSheetRow = null) => {
   });
 
   renderActiveTab();
-  showToast(`✓ Appended ${mode.toUpperCase()} to Row ${targetRow._sheetRow} draft — click "Save Log Changes" to push to Sheet.`);
+  showToast(`✓ Appended to Row ${targetRow._sheetRow} draft — click "Save Log Changes" to push to Sheet.`);
 };
 
 function getLogRowDraftKey(tabKey, sheetRow) {

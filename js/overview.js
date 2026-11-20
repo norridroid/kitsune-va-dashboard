@@ -395,6 +395,30 @@ function findCurrentDateActivityForVa(vaName, tabObj, liveRows) {
   return matchingMemberRows[0];
 }
 
+function findTodayActivityForVa(vaName, tabObj, liveRows) {
+  if (!Array.isArray(liveRows) || !liveRows.length) return null;
+  const todayIso = toLocalIsoDate(new Date());
+  const clean = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const targetVa = clean(vaName);
+  const fullName = clean((tabObj && tabObj.fullName) || "");
+  const tabName = clean((tabObj && tabObj.tabName) || "");
+  const firstTwo = (fullName || targetVa).split(" ").slice(0, 2).join(" ");
+
+  return (
+    liveRows.find((r) => {
+      const rIso = r.dateIso || parseRowDateToIso(r.date);
+      if (rIso !== todayIso) return false;
+      const m = clean(r.member);
+      return (
+        m === targetVa ||
+        (fullName && m === fullName) ||
+        (tabName && m === tabName) ||
+        (firstTwo && m.startsWith(firstTwo))
+      );
+    }) || null
+  );
+}
+
 function renderDashboard() {
   const data = latestData || {};
   const kpis = data.kpis || {};
@@ -511,6 +535,11 @@ function renderDashboard() {
       const shiftDateVal = latestRow ? String(latestRow.Date || latestRow.Week || "Today").trim() : "Today";
       const staleNoteBadge = getOverviewNoteStalenessBadge(tabObj);
 
+      const strictTodaySession = findTodayActivityForVa(v.va, tabObj, liveRows);
+      const todayInlinePill = strictTodaySession
+        ? `<span title="Today's Work Sessions Activity (${escapeHtml(strictTodaySession.totalDuration || "0:00:00")} tracked)" class="inline-flex items-center gap-0.5 text-[10px]">⚡${formatConditionalActivityBadge(`${strictTodaySession.avgActivityPct ?? 0}%`)}</span>`
+        : "";
+
       const todayWorkSession = findCurrentDateActivityForVa(v.va, tabObj, liveRows);
       const currentDateActBadge = todayWorkSession
         ? formatConditionalActivityBadge(`${todayWorkSession.avgActivityPct ?? 0}%`)
@@ -569,6 +598,7 @@ function renderDashboard() {
                  class="text-teal-300 hover:text-teal-200 underline decoration-teal-700 underline-offset-4 cursor-pointer">
                 ${escapeHtml(v.va)}
               </a>
+              ${todayInlinePill}
               ${isProb ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono">PROB</span>' : ""}
               ${isHiddenVa ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 border border-amber-700/60 font-mono">HIDDEN</span>' : ""}
               ${staleNoteBadge}
@@ -932,7 +962,7 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
                 <span class="text-xs font-bold text-blue-300 uppercase">${isProb ? "📋 Daily Task Milestones" : "🎯 Weekly SOW Focuses"}</span>
                 <button type="button" onclick="window.saveOvSowDraft('${safeTabKey}')"
                         class="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs cursor-pointer shadow">
-                  💾 Save SOW
+                  💾 SAVE
                 </button>
               </div>
 
@@ -940,14 +970,21 @@ function buildInlineAccordionHtml(tabKey, vaName, tabObj) {
                 ${focusInputsHtml}
               </div>
 
-              <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-                <button type="button" onclick="window.appendOvGoalsToDraft('${safeTabKey}', 'sod')"
-                        class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs cursor-pointer">
-                  ☀️ Append SOW (SOD) to Note Draft
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" onclick="window.addOvGoalItem('${safeTabKey}')"
+                        class="text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-950/40 hover:bg-blue-950/70 border border-blue-900/60 px-3 py-1.5 rounded-lg cursor-pointer">
+                  + Add ${itemLabel}
                 </button>
-                <button type="button" onclick="window.appendOvGoalsToDraft('${safeTabKey}', 'eod')"
-                        class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer">
-                  🌙 Append Audit (EOD) to Note Draft
+                <button type="button" onclick="window.clearOvGoalNotes('${safeTabKey}')"
+                        class="text-xs font-semibold text-amber-300 hover:text-amber-200 bg-amber-950/40 hover:bg-amber-950/70 border border-amber-800/70 px-3 py-1.5 rounded-lg cursor-pointer">
+                  🧹 Clear Notes
+                </button>
+              </div>
+
+              <div class="flex flex-wrap items-center justify-start gap-2 pt-2 border-t border-slate-800">
+                <button type="button" onclick="window.appendOvGoalsToDraft('${safeTabKey}')"
+                        class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs cursor-pointer">
+                  Append
                 </button>
               </div>
             </div>`
@@ -974,6 +1011,33 @@ window.updateOvGoalItem = (tabKey, idx, field, val, skipRerender = false) => {
   draft.focuses[idx] = { ...draft.focuses[idx], [field]: val };
   overviewSowDirty[getOverviewDraftKey(tabKey)] = true;
   if (!skipRerender) renderDashboard();
+};
+
+window.addOvGoalItem = (tabKey) => {
+  const draft = ensureOverviewSowDraft(tabKey);
+  draft.focuses.push({ id: `f_${Date.now()}`, text: "", achieved: false, outcomeNotes: "" });
+  overviewSowDirty[getOverviewDraftKey(tabKey)] = true;
+  renderDashboard();
+};
+
+window.clearOvGoalNotes = (tabKey) => {
+  const draft = ensureOverviewSowDraft(tabKey);
+  const baseThree = draft.focuses.slice(0, 3).map((f) => ({
+    ...f,
+    outcomeNotes: ""
+  }));
+  while (baseThree.length < 3) {
+    baseThree.push({
+      id: `f_${baseThree.length + 1}`,
+      text: "",
+      achieved: false,
+      outcomeNotes: ""
+    });
+  }
+  draft.focuses = baseThree;
+  overviewSowDirty[getOverviewDraftKey(tabKey)] = true;
+  renderDashboard();
+  showOverviewToast("✓ Cleared task notes and reset to 3 items — click SAVE to keep changes.");
 };
 
 window.handleOvMultiPaste = (e, tabKey, startIdx) => {
@@ -1003,7 +1067,7 @@ window.saveOvSowDraft = async (tabKey) => {
   renderDashboard();
 };
 
-window.appendOvGoalsToDraft = (tabKey, mode) => {
+window.appendOvGoalsToDraft = (tabKey) => {
   const selectedTabData = latestData.selectedTabData || {};
   const tabObj = selectedTabData[tabKey];
   if (!tabObj || !tabObj.rows || !tabObj.rows.length) return;
@@ -1017,21 +1081,17 @@ window.appendOvGoalsToDraft = (tabKey, mode) => {
   const resolved = resolveCurrentDateRow(tabObj.rows);
   const targetRow = resolved ? resolved.row : tabObj.rows[tabObj.rows.length - 1];
 
-  let block = "";
-  if (mode === "sod") {
-    block = `\n📋 [SOD SOW Focuses]\n`;
-    bucket.focuses.forEach((f) => {
-      if (f.text && f.text.trim()) block += `• ${f.text.trim()}\n`;
-    });
-  } else {
-    block = `\n🏁 [EOW Focus Audit]\n`;
-    bucket.focuses.forEach((f) => {
-      if (f.text && f.text.trim()) {
-        block += `• ${f.text.trim()} -> ${f.achieved ? "✓ Achieved" : "✗ Incomplete"}${
-          f.outcomeNotes ? ` (${f.outcomeNotes.trim()})` : ""
-        }\n`;
-      }
-    });
+  let block = `\n📋 [SOW Alignment]\n`;
+  bucket.focuses.forEach((f) => {
+    if (f.text && f.text.trim()) {
+      block += `• ${f.text.trim()}${f.achieved ? " -> ✓ Achieved" : ""}${
+        f.outcomeNotes && f.outcomeNotes.trim() ? ` (${f.outcomeNotes.trim()})` : ""
+      }\n`;
+    }
+  });
+
+  if (bucket.additionalNotes && bucket.additionalNotes.trim()) {
+    block += `\n📝 Additional Notes:\n${bucket.additionalNotes.trim()}\n`;
   }
 
   const rKey = getOverviewRowDraftKey(tabKey, targetRow._sheetRow);
@@ -1050,7 +1110,7 @@ window.appendOvGoalsToDraft = (tabKey, mode) => {
   });
 
   renderDashboard();
-  showOverviewToast(`✓ Appended ${mode.toUpperCase()} to Row ${targetRow._sheetRow} draft — click "Save Log Changes" to push to Sheet.`);
+  showOverviewToast(`✓ Appended to Row ${targetRow._sheetRow} draft — click "Save Log Changes" to push to Sheet.`);
 };
 
 window.stageOvNoteEdit = (tabKey, tabName, sheetRow, colIndex, val) => {
