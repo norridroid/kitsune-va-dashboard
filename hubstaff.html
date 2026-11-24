@@ -38,7 +38,7 @@
     </div>
 
     <!-- ==================================================================== -->
-    <!-- VIEW 1: WORK SESSIONS                                                -->
+    <!-- VIEW 1: WORK SESSIONS ONLY                                           -->
     <!-- ==================================================================== -->
     <div id="view-work-sessions" class="space-y-5">
       <!-- Single-Day Stepper & Synced Range Controls -->
@@ -177,43 +177,6 @@
             </thead>
             <tbody id="hs-tbody" class="divide-y divide-slate-800/80">
               <tr><td colspan="8" class="p-6 text-center text-slate-500">Waiting for Hubstaff sync...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Approved Leaves (This Month & Upcoming Months) displayed inside Work Sessions -->
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-        <div class="px-4 py-3 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div class="flex items-center gap-2">
-            <span class="font-bold text-emerald-300 uppercase tracking-wider text-[11px]">🌴 Approved Leaves (This Month &amp; Upcoming)</span>
-            <span id="ws-approved-count-pill" class="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-mono">0</span>
-          </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <input id="ws-to-search" type="text" placeholder="Filter member or reason..."
-                   class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-100 focus:border-teal-500 focus:outline-none" />
-            <select id="ws-to-policy-filter"
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:border-teal-500 focus:outline-none">
-              <option value="">All Policies</option>
-            </select>
-          </div>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left border-collapse text-xs">
-            <thead class="bg-teal-950/90 text-teal-100 text-[10px] uppercase tracking-wider select-none">
-              <tr>
-                <th data-sort-col="member" class="to-sort-th px-4 py-3 cursor-pointer hover:text-white whitespace-nowrap">Member <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="policy" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Policy <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="reason" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white w-52">Reason <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="start" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Start <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="end" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">End <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="hours" class="to-sort-th px-3 py-3 text-center cursor-pointer hover:text-white whitespace-nowrap">Hours <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="status" class="to-sort-th px-3 py-3 text-center cursor-pointer hover:text-white whitespace-nowrap">Status <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-                <th data-sort-col="requestedOn" class="to-sort-th px-3 py-3 cursor-pointer hover:text-white whitespace-nowrap">Requested On <span class="sort-ind text-slate-500 ml-1">⇅</span></th>
-              </tr>
-            </thead>
-            <tbody id="ws-approved-tbody" class="divide-y divide-slate-800/80">
-              <tr><td colspan="8" class="p-5 text-center text-slate-500">Waiting for Hubstaff Time Off sync...</td></tr>
             </tbody>
           </table>
         </div>

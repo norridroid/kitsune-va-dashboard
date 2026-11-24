@@ -54,7 +54,7 @@ let hasDeferredWsRender = false;
 let timeOffData = null;
 let kitsuneMemberNames = new Set();
 
-// Sort & filter state for Time Off tables
+// Sort & filter state for Time Off tab
 let toSortCol = "start";
 let toSortDir = "asc";
 let toSearchQuery = "";
@@ -90,8 +90,6 @@ const filterApprovedBtn = document.getElementById("to-filter-approved");
 const filterSubmittedBtn = document.getElementById("to-filter-submitted");
 const filterAllBtn = document.getElementById("to-filter-all");
 
-const wsSearchEl = document.getElementById("ws-to-search");
-const wsPolicyEl = document.getElementById("ws-to-policy-filter");
 const toSearchEl = document.getElementById("to-search-input");
 const toPolicyEl = document.getElementById("to-policy-filter");
 
@@ -265,30 +263,19 @@ function updateWsHiddenControlsUI(hiddenCount) {
   }
 }
 
-function syncFilterInputsAndRender() {
-  if (wsSearchEl && wsSearchEl.value !== toSearchQuery) wsSearchEl.value = toSearchQuery;
-  if (toSearchEl && toSearchEl.value !== toSearchQuery) toSearchEl.value = toSearchQuery;
-  if (wsPolicyEl && wsPolicyEl.value !== toPolicySelected) wsPolicyEl.value = toPolicySelected;
-  if (toPolicyEl && toPolicyEl.value !== toPolicySelected) toPolicyEl.value = toPolicySelected;
-  renderTimeOffTable();
-  renderWorkSessionsApprovedTable();
+if (toSearchEl) {
+  toSearchEl.addEventListener("input", (e) => {
+    toSearchQuery = String(e.target.value || "").trim().toLowerCase();
+    renderTimeOffTable();
+  });
 }
 
-[wsSearchEl, toSearchEl].forEach((el) => {
-  if (!el) return;
-  el.addEventListener("input", (e) => {
-    toSearchQuery = String(e.target.value || "").trim().toLowerCase();
-    syncFilterInputsAndRender();
-  });
-});
-
-[wsPolicyEl, toPolicyEl].forEach((el) => {
-  if (!el) return;
-  el.addEventListener("change", (e) => {
+if (toPolicyEl) {
+  toPolicyEl.addEventListener("change", (e) => {
     toPolicySelected = String(e.target.value || "");
-    syncFilterInputsAndRender();
+    renderTimeOffTable();
   });
-});
+}
 
 document.querySelectorAll(".to-sort-th").forEach((th) => {
   th.addEventListener("click", () => {
@@ -302,7 +289,6 @@ document.querySelectorAll(".to-sort-th").forEach((th) => {
     }
     updateSortHeaderIndicators();
     renderTimeOffTable();
-    renderWorkSessionsApprovedTable();
   });
 });
 
@@ -394,10 +380,11 @@ function setViewMode(mode) {
 
 modeSessionsBtn.addEventListener("click", () => setViewMode("sessions"));
 modeTimeOffBtn.addEventListener("click", () => setViewMode("timeoff"));
-toKitsuneOnlyEl.addEventListener("change", () => {
-  renderTimeOffTable();
-  renderWorkSessionsApprovedTable();
-});
+if (toKitsuneOnlyEl) {
+  toKitsuneOnlyEl.addEventListener("change", () => {
+    renderTimeOffTable();
+  });
+}
 
 subscribeCached("kitsuneDashboard", "kitsune_hubstaff_combined_cache", (data) => {
   if (!data) return;
@@ -416,6 +403,8 @@ subscribeCached("kitsuneDashboard", "kitsune_hubstaff_combined_cache", (data) =>
     if (t && t.tabName) names.add(String(t.tabName).trim().toLowerCase());
   });
   kitsuneMemberNames = names;
+
+  timeOffData = data.hubstaffTimeOff || null;
 
   const liveData = data.hubstaffLive;
   if (!liveData) {
@@ -447,7 +436,6 @@ subscribeCached("kitsuneDashboard", "kitsune_hubstaff_combined_cache", (data) =>
     }
   }
 
-  timeOffData = data.hubstaffTimeOff || null;
   populatePolicyDropdowns();
   updateSortHeaderIndicators();
   updateHsSortHeaderIndicators();
@@ -455,25 +443,22 @@ subscribeCached("kitsuneDashboard", "kitsune_hubstaff_combined_cache", (data) =>
 });
 
 function populatePolicyDropdowns() {
-  if (!timeOffData) return;
+  if (!timeOffData || !toPolicyEl) return;
   const allItems = [
     ...normalizeFirebaseArray(timeOffData.requests),
     ...normalizeFirebaseArray(timeOffData.approvedRequests)
   ];
   const policies = [...new Set(allItems.map((r) => String(r.policy || "").trim()).filter(Boolean))].sort();
 
-  [wsPolicyEl, toPolicyEl].forEach((sel) => {
-    if (!sel) return;
-    const prev = toPolicySelected;
-    sel.innerHTML =
-      `<option value="">All Policies</option>` +
-      policies
-        .map(
-          (p) =>
-            `<option value="${escapeHtml(p)}" ${p === prev ? "selected" : ""}>${escapeHtml(p)}</option>`
-        )
-        .join("");
-  });
+  const prev = toPolicySelected;
+  toPolicyEl.innerHTML =
+    `<option value="">All Policies</option>` +
+    policies
+      .map(
+        (p) =>
+          `<option value="${escapeHtml(p)}" ${p === prev ? "selected" : ""}>${escapeHtml(p)}</option>`
+      )
+      .join("");
 }
 
 function isKitsuneMember(memberName) {
@@ -575,8 +560,9 @@ function updateTimeOffBadgeAndRender() {
   } else {
     badgeEl.classList.add("hidden");
   }
-  renderTimeOffTable();
-  renderWorkSessionsApprovedTable();
+  if (currentViewMode === "timeoff") {
+    renderTimeOffTable();
+  }
 }
 
 function getTimeOffStatusBadge(status) {
@@ -606,33 +592,11 @@ function renderTimeOffRowHtml(r) {
     </tr>`;
 }
 
-function renderWorkSessionsApprovedTable() {
-  const tbody = document.getElementById("ws-approved-tbody");
-  const countPill = document.getElementById("ws-approved-count-pill");
-  if (!tbody) return;
-
-  if (!timeOffData) {
-    if (countPill) countPill.textContent = "0";
-    tbody.innerHTML = `<tr><td colspan="8" class="p-5 text-center text-slate-500">Waiting for Hubstaff Time Off sync...</td></tr>`;
-    return;
-  }
-
-  const kitsuneOnly = toKitsuneOnlyEl ? toKitsuneOnlyEl.checked : true;
-  const approvedList = getApprovedRequests(kitsuneOnly);
-  if (countPill) countPill.textContent = String(approvedList.length);
-
-  if (!approvedList.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="p-5 text-center text-slate-500">No approved leaves match the current filter.</td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = approvedList.map(renderTimeOffRowHtml).join("");
-}
-
 function renderTimeOffTable() {
   const tbody = document.getElementById("to-tbody");
   const countsSummary = document.getElementById("to-counts-summary");
   const syncedLabel = document.getElementById("to-synced-label");
+  if (!tbody) return;
 
   if (!timeOffData) {
     tbody.innerHTML = `<tr><td colspan="8" class="p-6 text-center text-slate-400">Open <a href="https://app.hubstaff.com/organizations/700726/time_off_requests" target="_blank" rel="noreferrer" class="text-teal-400 underline">Hubstaff Time Off Requests</a> with the extension reloaded to sync requests automatically.</td></tr>`;
@@ -887,18 +851,20 @@ function parsePastedHubstaffText(rawText) {
 }
 
 /**
- * Extracts only Start Time and End Time (no Full Time / Part Time label) for a tab or member.
+ * Extracts Start Time, End Time, and Shift Type (Full Time / Part Time) for a tab or member.
  */
 function getTimeOnlyScheduleFromTabObj(tabObj) {
   if (!tabObj) {
-    return { startTime: "", endTime: "", label: "—", startMinutes: 99999 };
+    return { shiftType: "", startTime: "", endTime: "", label: "—", startMinutes: 99999 };
   }
 
   const row2 = Array.isArray(tabObj.scheduleRow) ? tabObj.scheduleRow : [];
+  const a2 = String(row2[0] || "").trim();
   const b2 = String(row2[1] || "").trim();
   const c2 = String(row2[2] || "").trim();
   const isTimeStr = (v) => /^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(v);
 
+  let shiftType = a2 && !a2.toLowerCase().startsWith("shift schedule") ? a2 : "";
   let startTime = "";
   let endTime = "";
 
@@ -909,12 +875,17 @@ function getTimeOnlyScheduleFromTabObj(tabObj) {
     const times = [];
     row2.forEach((cell) => {
       const item = String(cell || "").trim();
+      if (!item || item.toLowerCase().includes("brief") || item.toLowerCase().startsWith("shift schedule")) {
+        return;
+      }
       const rangeMatch = item.match(/^(\d{1,2}:\d{2}\s*(?:AM|PM)?)\s*[-–to]+\s*(\d{1,2}:\d{2}\s*(?:AM|PM)?)$/i);
       if (rangeMatch) {
         times.push(rangeMatch[1].toUpperCase().replace(/\s+/g, ""));
         times.push(rangeMatch[2].toUpperCase().replace(/\s+/g, ""));
       } else if (isTimeStr(item)) {
         times.push(item.toUpperCase().replace(/\s+/g, ""));
+      } else if (!shiftType) {
+        shiftType = item;
       }
     });
     startTime = times[0] || "";
@@ -929,6 +900,7 @@ function getTimeOnlyScheduleFromTabObj(tabObj) {
       : "—";
 
   return {
+    shiftType: shiftType || "Full Time",
     startTime,
     endTime,
     label,
@@ -940,6 +912,71 @@ function getMemberTimeOnlySchedule(memberName, resolvedTabObj = null) {
   if (resolvedTabObj) return getTimeOnlyScheduleFromTabObj(resolvedTabObj);
   const resolved = resolveTabEntryForMember(memberName);
   return getTimeOnlyScheduleFromTabObj(resolved ? resolved.tabObj : null);
+}
+
+/**
+ * Resolves the Overview VA summary record (`vas`) so hover tooltips can show
+ * Coaching Focus, Activity (7d), and Avg Hrs.
+ */
+function resolveOverviewVaForMember(memberName, tabKey = "", tabObj = null) {
+  const vas = latestDashboardData.vas || {};
+  const list = Object.values(vas).filter(Boolean);
+  if (!list.length) return null;
+
+  const clean = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const mClean = clean(memberName);
+  const fnClean = clean((tabObj && tabObj.fullName) || "");
+  const tnClean = clean((tabObj && tabObj.tabName) || "");
+
+  if (tabKey) {
+    const byTab = list.find((v) => v.matchedTabKey === tabKey);
+    if (byTab) return byTab;
+  }
+
+  if (fnClean) {
+    const exactFull = list.find((v) => clean(v.va) === fnClean);
+    if (exactFull) return exactFull;
+  }
+
+  if (mClean) {
+    const exactMember = list.find((v) => clean(v.va) === mClean);
+    if (exactMember) return exactMember;
+  }
+
+  if (tnClean) {
+    const exactTab = list.find((v) => clean(v.va) === tnClean);
+    if (exactTab) return exactTab;
+  }
+
+  const words = (fnClean || mClean).split(" ").filter(Boolean);
+  const firstTwo = words.slice(0, 2).join(" ");
+  if (words.length >= 2) {
+    const twoWordMatch = list.find((v) => {
+      const vn = clean(v.va);
+      return vn === firstTwo || vn.startsWith(firstTwo + " ");
+    });
+    if (twoWordMatch) return twoWordMatch;
+  }
+
+  const firstWord = words[0] || "";
+  if (firstWord) {
+    const sameFirst = list.filter((v) => {
+      const vn = clean(v.va);
+      return vn === firstWord || vn.startsWith(firstWord + " ") || vn.split(/[\s@]+/)[0] === firstWord;
+    });
+    if (sameFirst.length === 1) return sameFirst[0];
+  }
+
+  return null;
+}
+
+function formatHoverCoachingFocus(rawFocus) {
+  const text = String(rawFocus || "On track").trim();
+  const lower = text.toLowerCase();
+  if (lower === "on track" || lower === "-") {
+    return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-800">${escapeHtml(text)}</span>`;
+  }
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/90 text-amber-300 border border-amber-800">${escapeHtml(text)}</span>`;
 }
 
 /**
@@ -1856,6 +1893,7 @@ function renderSelectedDateView() {
   const presentEnriched = rawRowsForDay.map((r) => {
     const resolvedTab = resolveTabEntryForMember(r.member);
     const tabKey = resolvedTab ? resolvedTab.tabKey : "";
+    const tabObj = resolvedTab ? resolvedTab.tabObj : null;
     if (tabKey) matchedTabKeys.add(tabKey);
 
     const normName = String(r.member || "").trim().toLowerCase();
@@ -1863,13 +1901,16 @@ function renderSelectedDateView() {
     const isHidden = wsHiddenSet.has(normName) || (normTab && wsHiddenSet.has(normTab));
     if (isHidden) activeHiddenCount++;
 
+    const overviewVa = resolveOverviewVaForMember(r.member, tabKey, tabObj);
+
     return {
       ...r,
       _isPresent: true,
       _statusType: "present",
       _tabKey: tabKey,
+      _overviewVa: overviewVa,
       _isHidden: isHidden,
-      _sched: getMemberTimeOnlySchedule(r.member, resolvedTab ? resolvedTab.tabObj : null)
+      _sched: getMemberTimeOnlySchedule(r.member, tabObj)
     };
   });
 
@@ -1895,6 +1936,7 @@ function renderSelectedDateView() {
         schedObj,
         selectedDate
       );
+      const overviewVa = resolveOverviewVaForMember(displayName, tabKey, tabObj);
 
       missingEnriched.push({
         key: `${selectedDate}__absent__${tabKey}`,
@@ -1911,6 +1953,7 @@ function renderSelectedDateView() {
         _leavePolicy: statusEval.policy || "",
         _leaveReason: statusEval.reason || "",
         _tabKey: tabKey,
+        _overviewVa: overviewVa,
         _isHidden: isHidden,
         _sched: schedObj
       });
@@ -1955,7 +1998,8 @@ function renderSelectedDateView() {
     if (hsSearchQuery) {
       const sessions = Array.isArray(r.sessions) ? r.sessions : [];
       const projStr = sessions.map((s) => `${s.project || ""} ${s.todo || ""}`).join(" ");
-      const schedStr = r._sched ? r._sched.label : "";
+      const schedStr = r._sched ? `${r._sched.label} ${r._sched.shiftType}` : "";
+      const focusStr = (r._overviewVa && r._overviewVa.coachingFocus) || "";
       const statusStr =
         r._statusType === "leave"
           ? `on leave ${r._leavePolicy}`
@@ -1964,7 +2008,7 @@ function renderSelectedDateView() {
           : r._isPresent
           ? "present"
           : "not present absent";
-      const haystack = `${r.member || ""} ${schedStr} ${projStr} ${statusStr}`.toLowerCase();
+      const haystack = `${r.member || ""} ${schedStr} ${projStr} ${statusStr} ${focusStr}`.toLowerCase();
       if (!haystack.includes(hsSearchQuery)) return false;
     }
     return true;
@@ -2027,6 +2071,12 @@ function renderSelectedDateView() {
       const isAlignExpanded = expandedAlignMemberKey === r.key;
       const sessions = Array.isArray(r.sessions) ? r.sessions : [];
       const schedLabel = r._sched ? r._sched.label : "—";
+      const shiftTypeLabel = (r._sched && r._sched.shiftType) || "Full Time";
+
+      const ov = r._overviewVa || {};
+      const ovCoachingFocus = ov.coachingFocus || "On track";
+      const ovActivity = ov.avgActivity || "-";
+      const ovAvgHrs = ov.avgHrsPerDay || "-";
 
       let presenceBadgeHtml = "";
       if (!r._isPresent) {
@@ -2112,11 +2162,35 @@ function renderSelectedDateView() {
               }
             </div>
           </td>
-          <td class="px-4 py-2.5 font-bold whitespace-nowrap">
+          <td class="px-4 py-2.5 font-bold whitespace-nowrap relative group cursor-help">
             <div class="flex items-center gap-2">
-              <span class="${r._isPresent ? "text-white" : "text-slate-300"}">${escapeHtml(r.member)}</span>
+              <span class="${r._isPresent ? "text-white" : "text-slate-300"} underline decoration-dotted decoration-teal-700 underline-offset-4">${escapeHtml(r.member)}</span>
               ${presenceBadgeHtml}
               ${r._isHidden ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 border border-amber-700/60 font-mono">HIDDEN</span>' : ""}
+            </div>
+
+            <!-- Floating Overview Hover Card (Coaching Focus, FT/PT, 7d Activity, Avg Hrs) -->
+            <div class="hidden group-hover:block absolute left-4 bottom-full mb-2 z-55 w-72 bg-slate-950/95 backdrop-blur-md border border-teal-700/70 rounded-xl p-3 shadow-2xl pointer-events-none space-y-2 text-left whitespace-normal font-normal">
+              <div class="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                <span class="text-[10px] font-bold uppercase tracking-wider text-teal-300">${escapeHtml(r.member)}</span>
+                <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-200">${escapeHtml(shiftTypeLabel)}</span>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2 pt-0.5 text-center font-mono">
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-1.5">
+                  <span class="block text-[9px] text-slate-400 font-sans">Activity (7d)</span>
+                  <div class="mt-0.5 text-xs">${ovActivity !== "-" ? formatConditionalActivityBadge(ovActivity) : '<span class="text-slate-400">-</span>'}</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-1.5">
+                  <span class="block text-[9px] text-slate-400 font-sans">Avg Hrs / Day</span>
+                  <strong class="text-xs text-teal-300">${escapeHtml(ovAvgHrs)}</strong>
+                </div>
+              </div>
+
+              <div class="text-[11px] flex items-center justify-between gap-2 pt-0.5">
+                <span class="text-slate-400">Coaching Focus:</span>
+                <span>${formatHoverCoachingFocus(ovCoachingFocus)}</span>
+              </div>
             </div>
           </td>
           <td class="px-3 py-2.5 text-center font-mono whitespace-nowrap">
