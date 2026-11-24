@@ -18,7 +18,11 @@ let siteProfiles = {};
 let siteGoals = {};
 let siteAmComms = {};
 let activeWeekKey = "week_1";
+
+// Requirement #5: Default view is minimized (SS2), with button to expand/collapse
+let isDossierExpanded = false;
 let isDossierEditing = false;
+
 let expandedAmRows = {};
 let expandedDateAlignRows = {};
 
@@ -27,6 +31,7 @@ let sowDirty = {};
 
 let logDrafts = {};
 let isSavingLogs = false;
+let hasDeferredSyncRender = false;
 
 // Tracks optimistic schedule saves so incoming Firebase snapshots don't revert End Time mid-sync
 let pendingScheduleLock = {};
@@ -59,6 +64,61 @@ function persistGlobalDateRange() {
     localStorage.setItem(GLOBAL_DATE_RANGE_KEY, JSON.stringify({ from: logDateFrom, to: logDateTo }));
   } catch (_) {}
 }
+
+function isUserActivelyEditing() {
+  if (isDossierEditing || isSavingLogs) return true;
+
+  const active = document.activeElement;
+  if (active && ["TEXTAREA", "INPUT", "SELECT"].includes(active.tagName)) {
+    const inTabContent = active.closest("#tab-content");
+    const inDossier = active.closest("#va-dossier-section");
+    if (inTabContent || inDossier) {
+      return true;
+    }
+  }
+
+  const hasDirtyLogs = Object.values(logDrafts).some(
+    (d) => d && (d.notesDirty || d.flagDirty || d.amDirty)
+  );
+  const hasDirtySow = Object.values(sowDirty).some(Boolean);
+  return hasDirtyLogs || hasDirtySow;
+}
+
+function withFocusPreserved(renderFn) {
+  const active = document.activeElement;
+  const activeId = active && active.id ? active.id : "";
+  const isTextControl = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT");
+  const selStart = isTextControl && typeof active.selectionStart === "number" ? active.selectionStart : null;
+  const selEnd = isTextControl && typeof active.selectionEnd === "number" ? active.selectionEnd : null;
+  const scrollTop = active && typeof active.scrollTop === "number" ? active.scrollTop : 0;
+
+  renderFn();
+
+  if (activeId) {
+    const restored = document.getElementById(activeId);
+    if (restored) {
+      restored.focus({ preventScroll: true });
+      if (isTextControl && selStart !== null && selEnd !== null && typeof restored.setSelectionRange === "function") {
+        try {
+          restored.setSelectionRange(selStart, selEnd);
+        } catch (_) {}
+      }
+      if (typeof restored.scrollTop === "number") {
+        restored.scrollTop = scrollTop;
+      }
+    }
+  }
+}
+
+document.addEventListener("focusout", () => {
+  setTimeout(() => {
+    if (hasDeferredSyncRender && !isUserActivelyEditing()) {
+      hasDeferredSyncRender = false;
+      populateVaPills();
+      renderAll();
+    }
+  }, 150);
+});
 
 function getInitialTarget() {
   const hashStr = window.location.hash.replace(/^#/, "");
@@ -120,6 +180,13 @@ subscribeCached("kitsuneDashboard", "kitsune_full_detail_cache", (data) => {
   siteAmComms = siteData.amComms || {};
 
   resolveRequestedKey();
+
+  if (isUserActivelyEditing()) {
+    hasDeferredSyncRender = true;
+    return;
+  }
+
+  hasDeferredSyncRender = false;
   populateVaPills();
   renderAll();
 });
@@ -243,7 +310,9 @@ window.selectVaTabPill = (key) => {
   if (!key || !selectedTabData[key]) return;
   activeKey = key;
   isDossierEditing = false;
+  isDossierExpanded = false; // Reset to minimized SS2 view when switching VAs
   expandedDateAlignRows = {};
+  hasDeferredSyncRender = false;
   const tabObj = selectedTabData[activeKey];
   const nameQuery = tabObj ? `&name=${encodeURIComponent(tabObj.fullName || tabObj.tabName)}` : "";
   window.history.replaceState({}, "", `#tab=${encodeURIComponent(activeKey)}${nameQuery}`);
@@ -576,45 +645,6 @@ function findHubstaffSessionForDate(tabObj, rowDateStr) {
   );
 }
 
-document.getElementById("save-schedule-btn").addEventListener("click", async () => {
-  const tabObj = selectedTabData[activeKey];
-  if (!tabObj) return;
-
-  const shiftType = document.getElementById("edit-shift-type").value.trim();
-  const startTime = document.getElementById("edit-start-time").value.trim();
-  const endTime = document.getElementById("edit-end-time").value.trim();
-  const briefUrl = document.getElementById("edit-brief-url").value.trim();
-
-  const existingRow2 = Array.isArray(tabObj.scheduleRow) ? [...tabObj.scheduleRow] : [];
-  while (existingRow2.length < 7) existingRow2.push("");
-  existingRow2[0] = shiftType;
-  existingRow2[1] = startTime;
-  existingRow2[2] = endTime;
-  existingRow2[6] = briefUrl ? "Account Brief" : "";
-
-  tabObj.scheduleRow = existingRow2;
-  tabObj.briefUrl = briefUrl;
-  pendingScheduleLock[activeKey] = {
-    timestamp: Date.now(),
-    scheduleRow: existingRow2,
-    briefUrl
-  };
-
-  renderDossierCard();
-  showToast(`Saving schedule (B2/C2) & Account Brief (G2) to ${tabObj.tabName}...`);
-
-  await updateScheduleMeta({
-    tabName: tabObj.tabName,
-    shiftType,
-    startTime,
-    endTime,
-    briefUrl,
-    metaCols: { shiftTypeCol: 1, startTimeCol: 2, endTimeCol: 3, briefCol: 7 }
-  });
-
-  showToast(`✓ Saved B2 (${startTime}), C2 (${endTime}) & G2 Brief to ${tabObj.tabName}!`);
-});
-
 window.autoResizeNote = (el) => {
   if (!el) return;
   el.style.height = "auto";
@@ -622,9 +652,22 @@ window.autoResizeNote = (el) => {
 };
 
 function renderAll() {
-  renderDossierCard();
-  renderActiveTab();
+  withFocusPreserved(() => {
+    renderDossierCard();
+    renderActiveTab();
+  });
 }
+
+window.toggleDossierExpand = () => {
+  isDossierExpanded = !isDossierExpanded;
+  renderDossierCard();
+};
+
+window.toggleDossierEdit = (val) => {
+  isDossierEditing = val;
+  if (val) isDossierExpanded = true;
+  renderDossierCard();
+};
 
 function renderDossierCard() {
   const section = document.getElementById("va-dossier-section");
@@ -644,10 +687,11 @@ function renderDossierCard() {
   const shiftRange = sched.startTime && sched.endTime ? `${sched.startTime} - ${sched.endTime}` : sched.startTime || "—";
   const staleInfo = getNoteStalenessInfo(tabObj);
 
+  // Requirement #5: Minimized SS2 view by default, with Expand/Collapse button
   if (!isDossierEditing) {
     section.innerHTML = `
-      <div class="bg-slate-900 border ${staleInfo && staleInfo.severity === "danger" ? "border-rose-800/80" : "border-slate-800"} rounded-2xl p-5 shadow-xl space-y-4">
-        <div class="flex flex-wrap justify-between items-start border-b border-slate-800/80 pb-3 gap-2">
+      <div class="bg-slate-900 border ${staleInfo && staleInfo.severity === "danger" ? "border-rose-800/80" : "border-slate-800"} rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+        <div class="flex flex-wrap justify-between items-center ${isDossierExpanded ? "border-b border-slate-800/80 pb-3" : ""} gap-2">
           <div>
             <div class="flex flex-wrap items-center gap-2.5">
               <h2 class="text-xl font-bold tracking-tight text-white">${escapeHtml(fullName)}</h2>
@@ -663,98 +707,145 @@ function renderDossierCard() {
               }">${isProb ? "PROBATIONARY" : "REGULAR"}</span>
               ${renderStalenessBadgeHtml(staleInfo)}
             </div>
-            <div class="text-xs text-slate-500 font-mono mt-1">
-              Sheet Tab: <strong class="text-slate-300">${escapeHtml(tabObj.tabName)}</strong> • Site-Only Profile Metadata
-            </div>
+            ${
+              isDossierExpanded
+                ? `<div class="text-xs text-slate-500 font-mono mt-1">
+                    Sheet Tab: <strong class="text-slate-300">${escapeHtml(tabObj.tabName)}</strong> • Site-Only Profile Metadata
+                  </div>`
+                : ""
+            }
           </div>
 
-          <button type="button" onclick="window.toggleDossierEdit(true)"
-                  class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold cursor-pointer">
-            Edit VA Settings & Contacts
-          </button>
-        </div>
-
-        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs">
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Schedule</span>
-            <p class="font-semibold text-slate-200 mt-0.5">${escapeHtml(sched.shiftType || "Full Time")}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Shift Hours (B2–C2)</span>
-            <p class="font-semibold text-slate-200 mt-0.5 font-mono whitespace-nowrap">${escapeHtml(shiftRange)}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">SOD Target</span>
-            <p class="font-semibold text-emerald-400 font-mono mt-0.5 whitespace-nowrap">${escapeHtml(profile.sodTarget || sched.startTime || "—")}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Start Date</span>
-            <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.startDate || "—")}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Probation End (3-Mo)</span>
-            <p class="font-semibold text-amber-400 font-mono mt-0.5">${escapeHtml(probEnd)}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Birthday</span>
-            <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.birthday || "—")}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">Primary Contact</span>
-            <p class="font-semibold text-emerald-400 font-mono mt-0.5">${escapeHtml(profile.phone || "—")}</p>
-          </div>
-          <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
-            <span class="text-slate-500 block text-[10px]">TL Lead</span>
-            <p class="font-semibold text-purple-400 font-mono mt-0.5">${escapeHtml(profile.tl || "Norris")}</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" onclick="window.toggleDossierExpand()"
+                    class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 font-semibold cursor-pointer">
+              ${isDossierExpanded ? "Collapse Dossier ▲" : "Expand Dossier ▼"}
+            </button>
+            <button type="button" onclick="window.toggleDossierEdit(true)"
+                    class="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 border border-blue-800 text-xs text-blue-300 font-semibold cursor-pointer">
+              ✏️ Edit VA Settings &amp; Sheet Row 2
+            </button>
           </div>
         </div>
 
-        <div class="bg-slate-950/60 border border-slate-800/90 rounded-xl p-4 space-y-2.5">
-          <div class="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-2 gap-2">
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-bold text-slate-200 uppercase tracking-wide">💼 Client & Assignment Dossier</span>
-              ${profile.role ? `<span class="bg-blue-950 text-blue-300 border border-blue-800 px-2 py-0.5 rounded text-[10px] font-semibold">${escapeHtml(profile.role)}</span>` : ""}
+        ${
+          isDossierExpanded
+            ? `
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs">
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">Schedule</span>
+                <p class="font-semibold text-slate-200 mt-0.5">${escapeHtml(sched.shiftType || "Full Time")}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">Shift Hours (B2–C2)</span>
+                <p class="font-semibold text-slate-200 mt-0.5 font-mono whitespace-nowrap">${escapeHtml(shiftRange)}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">SOD Target</span>
+                <p class="font-semibold text-emerald-400 font-mono mt-0.5 whitespace-nowrap">${escapeHtml(profile.sodTarget || sched.startTime || "—")}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">Start Date</span>
+                <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.startDate || "—")}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">Probation End (3-Mo)</span>
+                <p class="font-semibold text-amber-400 font-mono mt-0.5">${escapeHtml(probEnd)}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">Birthday</span>
+                <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.birthday || "—")}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">Primary Contact</span>
+                <p class="font-semibold text-emerald-400 font-mono mt-0.5">${escapeHtml(profile.phone || "—")}</p>
+              </div>
+              <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+                <span class="text-slate-500 block text-[10px]">TL Lead</span>
+                <p class="font-semibold text-purple-400 font-mono mt-0.5">${escapeHtml(profile.tl || "Norris")}</p>
+              </div>
             </div>
-            ${sched.briefUrl ? `<a href="${escapeHtml(sched.briefUrl)}" target="_blank" rel="noreferrer" class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">Open Brief Document (G2) ↗</a>` : ""}
-          </div>
 
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs pt-0.5">
-            <div>
-              <span class="text-slate-500 text-[10px] block">Client / Business</span>
-              <p class="font-semibold text-slate-200 mt-0.5">${escapeHtml(profile.clientName || "—")} ${profile.clientBusiness ? `(${escapeHtml(profile.clientBusiness)})` : ""}</p>
+            <div class="bg-slate-950/60 border border-slate-800/90 rounded-xl p-4 space-y-2.5">
+              <div class="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-2 gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold text-slate-200 uppercase tracking-wide">💼 Client &amp; Assignment Dossier</span>
+                  ${profile.role ? `<span class="bg-blue-950 text-blue-300 border border-blue-800 px-2 py-0.5 rounded text-[10px] font-semibold">${escapeHtml(profile.role)}</span>` : ""}
+                </div>
+                ${sched.briefUrl ? `<a href="${escapeHtml(sched.briefUrl)}" target="_blank" rel="noreferrer" class="text-xs text-blue-400 hover:text-blue-300 underline font-semibold">Open Brief Document (G2) ↗</a>` : ""}
+              </div>
+
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs pt-0.5">
+                <div>
+                  <span class="text-slate-500 text-[10px] block">Client / Business</span>
+                  <p class="font-semibold text-slate-200 mt-0.5">${escapeHtml(profile.clientName || "—")} ${profile.clientBusiness ? `(${escapeHtml(profile.clientBusiness)})` : ""}</p>
+                </div>
+                <div>
+                  <span class="text-slate-500 text-[10px] block">Required Working Days</span>
+                  <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.workingDays || "M • T • W • TH • F")}</p>
+                </div>
+                <div>
+                  <span class="text-slate-500 text-[10px] block">Client Email / Phone</span>
+                  <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.clientEmail || "—")}</p>
+                </div>
+                <div>
+                  <span class="text-slate-500 text-[10px] block">POC &amp; Comm Channel</span>
+                  <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.pocComm || "—")}</p>
+                </div>
+              </div>
             </div>
-            <div>
-              <span class="text-slate-500 text-[10px] block">Required Working Days</span>
-              <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.workingDays || "M • T • W • TH • F")}</p>
-            </div>
-            <div>
-              <span class="text-slate-500 text-[10px] block">Client Email / Phone</span>
-              <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.clientEmail || "—")}</p>
-            </div>
-            <div>
-              <span class="text-slate-500 text-[10px] block">POC & Comm Channel</span>
-              <p class="font-semibold text-slate-200 mt-0.5 font-mono">${escapeHtml(profile.pocComm || "—")}</p>
-            </div>
-          </div>
-        </div>
+            `
+            : ""
+        }
       </div>
     `;
     return;
   }
 
+  // Requirement #6: Includes Sheet Row 2 fields (Shift Type, Start Time, End Time, Account Brief URL) directly inside VA Details edit form
   section.innerHTML = `
     <form onsubmit="window.saveDossierForm(event)" class="bg-slate-900 border border-blue-800/70 rounded-2xl p-5 shadow-xl space-y-4 text-xs">
       <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
-        <span class="font-bold text-blue-400 uppercase tracking-wider">Editing Site-Only VA Settings & Client Dossier (${escapeHtml(fullName)})</span>
+        <span class="font-bold text-blue-400 uppercase tracking-wider">Editing VA Settings, Client Dossier &amp; Sheet Row 2 (${escapeHtml(fullName)})</span>
         <button type="button" onclick="window.toggleDossierEdit(false)" class="text-slate-400 hover:text-white underline cursor-pointer">Cancel</button>
       </div>
 
+      <!-- Google Sheet Row 2 Fields (Pushed to Sheet on Save) -->
+      <div class="bg-teal-950/25 border border-teal-800/60 rounded-xl p-3.5 space-y-2.5">
+        <div class="text-[11px] font-bold text-teal-300 uppercase tracking-wider">
+          📊 Google Sheet Row 2 Schedule &amp; Account Brief (Pushed to Sheet on Save)
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+          <div class="lg:col-span-3">
+            <label class="text-slate-400 block mb-1 font-semibold">Shift Type (A2)</label>
+            <input id="dos-shift-type" type="text" value="${escapeHtml(sched.shiftType || "Full Time")}" placeholder="Full Time"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100" />
+          </div>
+          <div class="lg:col-span-2">
+            <label class="text-slate-400 block mb-1 font-semibold">Start Time (B2)</label>
+            <input id="dos-start-time" type="text" value="${escapeHtml(sched.startTime || "")}" placeholder="6:00AM"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono" />
+          </div>
+          <div class="lg:col-span-2">
+            <label class="text-slate-400 block mb-1 font-semibold">End Time (C2)</label>
+            <input id="dos-end-time" type="text" value="${escapeHtml(sched.endTime || "")}" placeholder="2:00PM"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono" />
+          </div>
+          <div class="lg:col-span-5">
+            <label class="text-slate-400 block mb-1 font-semibold">Account Brief URL (G2)</label>
+            <input id="dos-brief-url" type="url" value="${escapeHtml(sched.briefUrl || "")}" placeholder="https://docs.google.com/..."
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Site-Only VA Metadata & Client Assignment -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div>
           <label class="text-slate-400 block mb-1 font-semibold">Employment Tier</label>
           <select id="dos-tier" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100">
-            <option value="regular" ${tier === "regular" ? "selected" : ""}>Regular (Weekly SOW)</option>
-            <option value="prob" ${tier === "prob" ? "selected" : ""}>Probationary (Daily Tasks)</option>
+            <option value="regular" ${tier === "regular" ? "selected" : ""}>Regular</option>
+            <option value="prob" ${tier === "prob" ? "selected" : ""}>Probationary</option>
           </select>
         </div>
         <div>
@@ -815,50 +906,82 @@ function renderDossierCard() {
                  class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100" />
         </div>
         <div class="sm:col-span-2">
-          <label class="text-slate-400 block mb-1 font-semibold">POC & Comm Channel</label>
+          <label class="text-slate-400 block mb-1 font-semibold">POC &amp; Comm Channel</label>
           <input id="dos-poc" type="text" value="${escapeHtml(profile.pocComm || "")}" placeholder="Roslyn Bella via Slack"
                  class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100" />
         </div>
       </div>
 
       <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
-        <button type="button" onclick="window.toggleDossierEdit(false)" class="px-3 py-1.5 text-slate-400 hover:text-white">Cancel</button>
-        <button type="submit" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold">Save Site Profile</button>
+        <button type="button" onclick="window.toggleDossierEdit(false)" class="px-3 py-1.5 text-slate-400 hover:text-white cursor-pointer">Cancel</button>
+        <button type="submit" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold cursor-pointer">
+          💾 Save VA Details &amp; Push Row 2 to Sheet
+        </button>
       </div>
     </form>
   `;
 }
-
-window.toggleDossierEdit = (val) => {
-  isDossierEditing = val;
-  renderDossierCard();
-};
 
 window.saveDossierForm = async (e) => {
   e.preventDefault();
   const tabObj = selectedTabData[activeKey];
   if (!tabObj) return;
 
-  await updateSiteData(`vaProfiles/${activeKey}`, {
-    tabName: tabObj.tabName,
-    fullName: resolveFullVaName(tabObj),
-    employmentTier: document.getElementById("dos-tier").value,
-    active: document.getElementById("dos-active").value === "true",
-    sodTarget: document.getElementById("dos-sod").value.trim(),
-    tl: document.getElementById("dos-tl").value.trim(),
-    startDate: document.getElementById("dos-start").value,
-    birthday: document.getElementById("dos-bday").value,
-    phone: document.getElementById("dos-phone").value.trim(),
-    role: document.getElementById("dos-role").value.trim(),
-    clientName: document.getElementById("dos-client").value.trim(),
-    clientBusiness: document.getElementById("dos-biz").value.trim(),
-    workingDays: document.getElementById("dos-days").value.trim(),
-    clientEmail: document.getElementById("dos-cemail").value.trim(),
-    pocComm: document.getElementById("dos-poc").value.trim()
-  });
+  const shiftType = document.getElementById("dos-shift-type").value.trim();
+  const startTime = document.getElementById("dos-start-time").value.trim();
+  const endTime = document.getElementById("dos-end-time").value.trim();
+  const briefUrl = document.getElementById("dos-brief-url").value.trim();
+
+  // Optimistically update local Row 2 schedule & Account Brief
+  const existingRow2 = Array.isArray(tabObj.scheduleRow) ? [...tabObj.scheduleRow] : [];
+  while (existingRow2.length < 7) existingRow2.push("");
+  existingRow2[0] = shiftType;
+  existingRow2[1] = startTime;
+  existingRow2[2] = endTime;
+  existingRow2[6] = briefUrl ? "Account Brief" : "";
+
+  tabObj.scheduleRow = existingRow2;
+  tabObj.briefUrl = briefUrl;
+  pendingScheduleLock[activeKey] = {
+    timestamp: Date.now(),
+    scheduleRow: existingRow2,
+    briefUrl
+  };
+
+  showToast(`Saving VA profile & pushing Row 2 (Start/End Time & Brief) to ${tabObj.tabName}...`);
+
+  await Promise.all([
+    updateSiteData(`vaProfiles/${activeKey}`, {
+      tabName: tabObj.tabName,
+      fullName: resolveFullVaName(tabObj),
+      employmentTier: document.getElementById("dos-tier").value,
+      active: document.getElementById("dos-active").value === "true",
+      sodTarget: document.getElementById("dos-sod").value.trim(),
+      tl: document.getElementById("dos-tl").value.trim(),
+      startDate: document.getElementById("dos-start").value,
+      birthday: document.getElementById("dos-bday").value,
+      phone: document.getElementById("dos-phone").value.trim(),
+      role: document.getElementById("dos-role").value.trim(),
+      clientName: document.getElementById("dos-client").value.trim(),
+      clientBusiness: document.getElementById("dos-biz").value.trim(),
+      workingDays: document.getElementById("dos-days").value.trim(),
+      clientEmail: document.getElementById("dos-cemail").value.trim(),
+      pocComm: document.getElementById("dos-poc").value.trim()
+    }),
+    updateScheduleMeta({
+      tabName: tabObj.tabName,
+      shiftType,
+      startTime,
+      endTime,
+      briefUrl,
+      metaCols: { shiftTypeCol: 1, startTimeCol: 2, endTimeCol: 3, briefCol: 7 }
+    })
+  ]);
 
   isDossierEditing = false;
-  showToast("✓ Saved site-only VA dossier & profile!");
+  hasDeferredSyncRender = false;
+  showToast(`✓ Saved VA Details & pushed Start/End Time + Brief to ${tabObj.tabName}!`);
+  renderAll();
 };
 
 function getDraftKey(tabKey, weekKey) {
@@ -906,6 +1029,7 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
   const itemLabel = isProb ? "Task" : "Focus";
   const dKey = getDraftKey(activeKey, activeWeekKey);
   const hasUnsaved = Boolean(sowDirty[dKey]);
+  const allChecked = bucket.focuses.length > 0 && bucket.focuses.every((f) => Boolean(f.achieved));
 
   const itemsHtml = bucket.focuses
     .map(
@@ -923,13 +1047,13 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
           ${f.achieved ? '<span class="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-1.5 py-0.5 rounded font-mono font-bold">HIT</span>' : ""}
         </div>
 
-        <textarea rows="2"
+        <textarea id="sow-focus-text-${targetSheetRow || "main"}-${idx}" rows="2"
                   onpaste="window.handleMultiPasteGoals(event, ${idx})"
                   oninput="window.updateGoalItem(${idx}, 'text', this.value, true)"
-                  placeholder="Enter SOW ${itemLabel.toLowerCase()} ${idx + 1} (or paste a full list to auto-split)..."
+                  placeholder="Enter ${itemLabel.toLowerCase()} ${idx + 1} (or paste a full list to auto-split)..."
                   class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 leading-normal">${escapeHtml(f.text || "")}</textarea>
 
-        <input type="text"
+        <input id="sow-focus-outcome-${targetSheetRow || "main"}-${idx}" type="text"
                value="${escapeHtml(f.outcomeNotes || "")}"
                oninput="window.updateGoalItem(${idx}, 'outcomeNotes', this.value, true)"
                placeholder="Outcome details, progress, or blockers..."
@@ -947,7 +1071,7 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
         <div class="flex flex-wrap items-center gap-2.5">
           <span class="text-base">${isProb ? "⏳" : "🎯"}</span>
           <span class="text-xs font-bold text-white uppercase tracking-wider">
-            ${isProb ? "DAILY TASK ALIGNMENT" : "WEEKLY SOW ALIGNMENT"}:
+            TASKS/FOCUSES:
             <strong class="text-blue-400">${escapeHtml(tabObj.tabName.toUpperCase())}</strong>
             ${targetDateLabel ? `<span class="text-teal-300 font-mono ml-1">• ${escapeHtml(targetDateLabel)}</span>` : `(${escapeHtml(fullName.toUpperCase())})`}
           </span>
@@ -960,7 +1084,11 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
           </span>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" onclick="window.toggleCheckAllGoals()"
+                  class="px-3 py-1.5 text-xs font-semibold text-emerald-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg cursor-pointer">
+            ${allChecked ? "☐ Uncheck All" : "✓ Check All"}
+          </button>
           <button type="button" onclick="window.saveSowDraft()"
                   class="px-3.5 py-1.5 text-xs font-bold text-white ${
                     hasUnsaved ? "bg-teal-600 hover:bg-teal-500 ring-2 ring-teal-400/50" : "bg-teal-700 hover:bg-teal-600"
@@ -977,7 +1105,7 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold text-slate-200 uppercase tracking-wide">
-            ${isProb ? "📋 DAILY TASK MILESTONES" : "🎯 WEEKLY SOW FOCUSES"}
+            🎯 TASKS/FOCUSES
           </span>
           <span class="text-[9px] px-2 py-0.5 rounded border font-mono font-bold ${
             isProb ? "bg-amber-950 border-amber-800 text-amber-300" : "bg-sky-950 border-sky-800 text-sky-300"
@@ -1000,9 +1128,9 @@ function buildAlignmentDrawerHtml({ targetSheetRow = null, targetDateLabel = "" 
 
       <div class="pt-2 border-t border-slate-800/80 space-y-1.5">
         <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">📝 ADDITIONAL NOTES:</label>
-        <textarea rows="2"
+        <textarea id="sow-additional-notes-${targetSheetRow || "main"}" rows="2"
                   oninput="window.updateGoalAdditionalNotes(this.value, true)"
-                  placeholder="Enter additional weekly context, client targets, or review notes..."
+                  placeholder="Enter additional context, client targets, or review notes..."
                   class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono leading-relaxed">${escapeHtml(bucket.additionalNotes)}</textarea>
       </div>
 
@@ -1028,12 +1156,21 @@ function markSowDirtyIndicator() {
 window.toggleDateAlignRow = (sheetRow) => {
   const key = `${activeKey}__${sheetRow}`;
   expandedDateAlignRows[key] = !expandedDateAlignRows[key];
-  renderActiveTab();
+  withFocusPreserved(() => renderActiveTab());
 };
 
 window.setSowWeek = (wk) => {
   activeWeekKey = wk;
-  renderActiveTab();
+  withFocusPreserved(() => renderActiveTab());
+};
+
+window.toggleCheckAllGoals = () => {
+  const draft = ensureLocalDraft();
+  const allChecked = draft.focuses.length > 0 && draft.focuses.every((f) => Boolean(f.achieved));
+  const nextState = !allChecked;
+  draft.focuses = draft.focuses.map((f) => ({ ...f, achieved: nextState }));
+  markSowDirtyIndicator();
+  withFocusPreserved(() => renderActiveTab());
 };
 
 window.updateGoalItem = (idx, field, val, skipRerender = false) => {
@@ -1041,7 +1178,7 @@ window.updateGoalItem = (idx, field, val, skipRerender = false) => {
   draft.focuses[idx] = { ...draft.focuses[idx], [field]: val };
   markSowDirtyIndicator();
   if (!skipRerender) {
-    renderActiveTab();
+    withFocusPreserved(() => renderActiveTab());
   }
 };
 
@@ -1049,27 +1186,21 @@ window.addGoalItem = () => {
   const draft = ensureLocalDraft();
   draft.focuses.push({ id: `f_${Date.now()}`, text: "", achieved: false, outcomeNotes: "" });
   markSowDirtyIndicator();
-  renderActiveTab();
+  withFocusPreserved(() => renderActiveTab());
 };
 
 window.clearGoalNotes = () => {
   const draft = ensureLocalDraft();
-  const baseThree = draft.focuses.slice(0, 3).map((f) => ({
-    ...f,
-    outcomeNotes: ""
-  }));
-  while (baseThree.length < 3) {
-    baseThree.push({
-      id: `f_${baseThree.length + 1}`,
-      text: "",
-      achieved: false,
-      outcomeNotes: ""
-    });
-  }
-  draft.focuses = baseThree;
+  // Resets back to 3 completely blank Tasks/Focuses and clears additionalNotes
+  draft.focuses = [
+    { id: "f_1", text: "", achieved: false, outcomeNotes: "" },
+    { id: "f_2", text: "", achieved: false, outcomeNotes: "" },
+    { id: "f_3", text: "", achieved: false, outcomeNotes: "" }
+  ];
+  draft.additionalNotes = "";
   markSowDirtyIndicator();
-  renderActiveTab();
-  showToast("✓ Cleared task notes and reset to 3 items — click SAVE to keep changes.");
+  withFocusPreserved(() => renderActiveTab());
+  showToast("✓ Cleared all Tasks/Focuses and reset to 3 empty items — click SAVE to push.");
 };
 
 window.updateGoalAdditionalNotes = (val, skipRerender = false) => {
@@ -1077,7 +1208,7 @@ window.updateGoalAdditionalNotes = (val, skipRerender = false) => {
   draft.additionalNotes = val;
   markSowDirtyIndicator();
   if (!skipRerender) {
-    renderActiveTab();
+    withFocusPreserved(() => renderActiveTab());
   }
 };
 
@@ -1090,8 +1221,8 @@ window.saveSowDraft = async () => {
   });
   delete sowDrafts[dKey];
   delete sowDirty[dKey];
-  showToast(`✓ Saved SOW / Daily Tasks!`);
-  renderActiveTab();
+  showToast(`✓ Saved Tasks/Focuses (synced with Work Sessions)!`);
+  withFocusPreserved(() => renderActiveTab());
 };
 
 window.handleMultiPasteGoals = (e, startIdx) => {
@@ -1110,7 +1241,7 @@ window.handleMultiPasteGoals = (e, startIdx) => {
   });
 
   markSowDirtyIndicator();
-  renderActiveTab();
+  withFocusPreserved(() => renderActiveTab());
   showToast(`✓ Auto-split ${items.length} items — click SAVE when ready!`);
 };
 
@@ -1133,7 +1264,7 @@ window.appendGoalsToSheet = (specificSheetRow = null) => {
     : [...tabObj.rows].reverse().find((r) => String(r.Clock_in || r.Clock_In || "").trim()) ||
       tabObj.rows[tabObj.rows.length - 1];
 
-  let block = `\n📋 [SOW Alignment]\n`;
+  let block = `\n📋 [Tasks/Focuses]\n`;
   bucket.focuses.forEach((f) => {
     if (f.text && f.text.trim()) {
       block += `• ${f.text.trim()}${f.achieved ? " -> ✓ Achieved" : ""}${
@@ -1161,7 +1292,7 @@ window.appendGoalsToSheet = (specificSheetRow = null) => {
     notesDirty: true
   });
 
-  renderActiveTab();
+  withFocusPreserved(() => renderActiveTab());
   showToast(`✓ Appended to Row ${targetRow._sheetRow} draft — click "Save Log Changes" to push to Sheet.`);
 };
 
@@ -1331,7 +1462,7 @@ window.saveAllLogDrafts = async () => {
       }
 
       if (entry.amDirty) {
-        const targetCol = entry.redFlagCol || 7; // Column G (RED FLAG COMMS)
+        const targetCol = entry.redFlagCol || 7;
         if (entry.tabName) {
           promises.push(
             Promise.race([
@@ -1365,6 +1496,7 @@ window.saveAllLogDrafts = async () => {
     showToast(`Error saving logs: ${err.message}`);
   } finally {
     isSavingLogs = false;
+    hasDeferredSyncRender = false;
     updateLogSaveButtonsUI();
     populateVaPills();
     renderAll();
@@ -1456,13 +1588,11 @@ function getFlagSelectStyle(val) {
 
 function renderActiveTab() {
   const container = document.getElementById("tab-content");
-  const editorEl = document.getElementById("schedule-editor");
   const openBriefLink = document.getElementById("open-brief-link");
   const tabObj = selectedTabData[activeKey];
 
   if (!tabObj) {
-    editorEl.classList.add("hidden");
-    openBriefLink.classList.add("hidden");
+    if (openBriefLink) openBriefLink.classList.add("hidden");
     const missingLabel = initialTarget.name || initialTarget.tab;
     container.innerHTML = `
       <p class="text-slate-400 text-sm">
@@ -1472,22 +1602,16 @@ function renderActiveTab() {
     return;
   }
 
-  editorEl.classList.remove("hidden");
   const fields = parseScheduleFields(tabObj);
-  document.getElementById("edit-shift-type").value = fields.shiftType;
-  document.getElementById("edit-start-time").value = fields.startTime;
-  document.getElementById("edit-end-time").value = fields.endTime;
-  document.getElementById("edit-brief-url").value = fields.briefUrl;
-
-  if (fields.briefUrl) {
-    openBriefLink.href = fields.briefUrl;
-    openBriefLink.classList.remove("hidden");
-  } else {
-    openBriefLink.classList.add("hidden");
+  if (openBriefLink) {
+    if (fields.briefUrl) {
+      openBriefLink.href = fields.briefUrl;
+      openBriefLink.classList.remove("hidden");
+    } else {
+      openBriefLink.classList.add("hidden");
+    }
   }
 
-  const profile = siteProfiles[activeKey] || {};
-  const isProb = profile.employmentTier === "prob";
   const summaryVa = resolveSummaryVaRecord(tabObj);
   const liveStatus = (summaryVa && summaryVa.statusNow) || "Status unavailable";
   const isOnline = liveStatus.toLowerCase().includes("logged in");
@@ -1506,10 +1630,9 @@ function renderActiveTab() {
 
   const redFlagIdx = headers.findIndex((h) => /red\s*flag\s*comms/i.test(h));
   const redFlagKey = redFlagIdx !== -1 ? cleanHeaders[redFlagIdx] : "RED_FLAG_COMMS";
-  const redFlagCol = redFlagIdx !== -1 ? colIndices[redFlagIdx] : 7; // Column G default
+  const redFlagCol = redFlagIdx !== -1 ? colIndices[redFlagIdx] : 7;
   const rawRedFlagHeader = redFlagIdx !== -1 ? headers[redFlagIdx] : "RED FLAG COMMS";
 
-  // Build visible column list (hide duplicate RED FLAG COMMS column since it's edited in AM Comms drawer)
   const visibleColumnIndices = headers
     .map((h, idx) => ({ h, idx }))
     .filter(({ h }) => !/red\s*flag\s*comms/i.test(h));
@@ -1744,7 +1867,7 @@ function renderActiveTab() {
                                   ? "bg-blue-800 text-white border-blue-500"
                                   : "bg-slate-950 text-blue-300 border-slate-800 hover:border-blue-600"
                               }">
-                        ${isDateAlignOpen ? "▲ Hide Alignment" : isProb ? "🎯 Daily Task Alignment" : "🎯 Weekly SOW Alignment"}
+                        ${isDateAlignOpen ? "▲ Hide Tasks/Focuses" : "🎯 Tasks/Focuses"}
                       </button>
                     </div>
 
@@ -1752,7 +1875,7 @@ function renderActiveTab() {
                       isAmOpen
                         ? `<div class="bg-rose-950/25 border border-rose-900/60 rounded-lg p-2 space-y-1">
                             <div class="text-[10px] font-bold text-rose-300 uppercase">🚩 AM Red Flag Comms (Syncs to Column G)</div>
-                            <textarea rows="2"
+                            <textarea id="am-comms-box-${row._sheetRow}" rows="2"
                                       oninput="window.stageAmCommsEdit('${tabObj.tabName}', ${row._sheetRow}, ${redFlagCol}, '${amKey}', this.value)"
                                       placeholder="Log client escalations or AM follow-ups (pushes to Col G)..."
                                       class="w-full bg-slate-950 border ${
@@ -1804,5 +1927,5 @@ function renderActiveTab() {
 
 window.toggleAmCommsRow = (amKey) => {
   expandedAmRows[amKey] = !expandedAmRows[amKey];
-  renderActiveTab();
+  withFocusPreserved(() => renderActiveTab());
 };
