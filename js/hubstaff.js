@@ -411,7 +411,7 @@ subscribeCached("kitsuneDashboard", "kitsune_hubstaff_combined_cache", (data) =>
     if (!isUsingManualPaste) {
       statusEl.textContent = "⏳ Waiting for background Hubstaff tab to sync...";
       document.getElementById("hs-tbody").innerHTML =
-        `<tr><td colspan="8" class="p-6 text-center text-slate-400">Open your pinned Hubstaff Work Sessions tab (with the Kitsune extension enabled) or click <strong>📋 Paste Table Fallback</strong> above.</td></tr>`;
+        `<tr><td colspan="9" class="p-6 text-center text-slate-400">Open your pinned Hubstaff Work Sessions tab (with the Kitsune extension enabled) or click <strong>📋 Paste Table Fallback</strong> above.</td></tr>`;
     }
   } else {
     allFirebaseRows = Array.isArray(liveData.rows) ? liveData.rows : Object.values(liveData.rows || {});
@@ -1067,10 +1067,80 @@ function populateStartTimeFilterDropdown(enrichedRows) {
       .join("");
 }
 
+/**
+ * Resolves the read-only Flag value (Green/Yellow/Red/RL/EL) for a VA on the selected Session Date.
+ */
+function getMemberFlagForSelectedDate(tabKey, tabObj) {
+  if (!tabObj || !selectedDate) return "";
+  const resolvedRow = resolveSheetRowForSessionDate(tabObj, selectedDate);
+  const row = resolvedRow ? resolvedRow.row : null;
+  if (!row) return "";
+
+  const rDraft = tabKey ? wsLogDrafts[getWsRowDraftKey(tabKey, row._sheetRow)] || {} : {};
+  if (rDraft.flagDirty) {
+    return String(rDraft.flagVal || "").trim();
+  }
+
+  const headers = tabObj.headers || [];
+  const cleanHeaders = tabObj.cleanHeaders || [];
+  const flagIdx = headers.findIndex((h) => h.toLowerCase() === "flag");
+  const flagKey = flagIdx !== -1 ? cleanHeaders[flagIdx] : "";
+  const rawFlagHeader = flagIdx !== -1 ? headers[flagIdx] : "Flag";
+
+  const serverFlag =
+    row[flagKey] !== undefined
+      ? row[flagKey]
+      : row[rawFlagHeader] !== undefined
+      ? row[rawFlagHeader]
+      : row[rawFlagHeader.toLowerCase()] || row["flag"] || "";
+
+  return String(serverFlag || "").trim();
+}
+
+function renderFlagBadgeHtml(flagVal) {
+  const clean = String(flagVal || "").trim();
+  const upper = clean.toUpperCase();
+  if (!clean) {
+    return `<span title="No flag set — click + Align to set" class="text-slate-500 font-mono">—</span>`;
+  }
+  let styleClass = "bg-slate-800 text-slate-200 border-slate-700";
+  let label = clean;
+  if (upper === "GREEN") {
+    styleClass = "bg-emerald-950/90 text-emerald-300 border-emerald-700";
+    label = "Green";
+  } else if (upper === "YELLOW") {
+    styleClass = "bg-amber-950/90 text-amber-300 border-amber-700";
+    label = "Yellow";
+  } else if (upper === "RED") {
+    styleClass = "bg-rose-950/90 text-rose-300 border-rose-700";
+    label = "Red";
+  } else if (upper === "RL") {
+    styleClass = "bg-purple-950/90 text-purple-300 border-purple-700";
+    label = "RL";
+  } else if (upper === "EL") {
+    styleClass = "bg-orange-950/90 text-orange-300 border-orange-700";
+    label = "EL";
+  }
+
+  return `<span title="Read-only view — click + Align to change flag" class="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${styleClass}">${escapeHtml(label)}</span>`;
+}
+
+function getFlagSortRank(flagVal) {
+  const upper = String(flagVal || "").trim().toUpperCase();
+  if (upper === "RED") return 1;
+  if (upper === "YELLOW") return 2;
+  if (upper === "EL") return 3;
+  if (upper === "RL") return 4;
+  if (upper === "GREEN") return 5;
+  return 99;
+}
+
 function getHsSortVal(r, col) {
   switch (col) {
     case "member":
       return String(r.member || "").toLowerCase();
+    case "flag":
+      return getFlagSortRank(r._flag);
     case "schedule":
       return r._sched ? r._sched.startMinutes : 99999;
     case "started":
@@ -1743,6 +1813,7 @@ window.stageWsFlagEdit = (tabKey, tabName, sheetRow, colIndex, val, selectEl) =>
   if (selectEl) {
     selectEl.className = `px-2.5 py-1 rounded border text-xs cursor-pointer ${getFlagSelectStyle(val)}`;
   }
+  withWsFocusPreserved(() => renderSelectedDateView());
 };
 
 window.stageWsAmEdit = (tabKey, tabName, sheetRow, redFlagCol, amKey, val) => {
@@ -1908,6 +1979,7 @@ function renderSelectedDateView() {
       _isPresent: true,
       _statusType: "present",
       _tabKey: tabKey,
+      _flag: getMemberFlagForSelectedDate(tabKey, tabObj),
       _overviewVa: overviewVa,
       _isHidden: isHidden,
       _sched: getMemberTimeOnlySchedule(r.member, tabObj)
@@ -1953,6 +2025,7 @@ function renderSelectedDateView() {
         _leavePolicy: statusEval.policy || "",
         _leaveReason: statusEval.reason || "",
         _tabKey: tabKey,
+        _flag: getMemberFlagForSelectedDate(tabKey, tabObj),
         _overviewVa: overviewVa,
         _isHidden: isHidden,
         _sched: schedObj
@@ -2000,6 +2073,7 @@ function renderSelectedDateView() {
       const projStr = sessions.map((s) => `${s.project || ""} ${s.todo || ""}`).join(" ");
       const schedStr = r._sched ? `${r._sched.label} ${r._sched.shiftType}` : "";
       const focusStr = (r._overviewVa && r._overviewVa.coachingFocus) || "";
+      const flagStr = r._flag || "";
       const statusStr =
         r._statusType === "leave"
           ? `on leave ${r._leavePolicy}`
@@ -2008,7 +2082,7 @@ function renderSelectedDateView() {
           : r._isPresent
           ? "present"
           : "not present absent";
-      const haystack = `${r.member || ""} ${schedStr} ${projStr} ${statusStr} ${focusStr}`.toLowerCase();
+      const haystack = `${r.member || ""} ${flagStr} ${schedStr} ${projStr} ${statusStr} ${focusStr}`.toLowerCase();
       if (!haystack.includes(hsSearchQuery)) return false;
     }
     return true;
@@ -2058,7 +2132,7 @@ function renderSelectedDateView() {
   document.getElementById("hs-kpi-low").textContent = String(lowActCount);
 
   if (!rowsForDay.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="p-6 text-center text-slate-500">No members match ${escapeHtml(selectedDate || "this date")} / current filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-500">No members match ${escapeHtml(selectedDate || "this date")} / current filter.</td></tr>`;
     return;
   }
 
@@ -2092,7 +2166,7 @@ function renderSelectedDateView() {
 
       const alignDrawerRow = isAlignExpanded
         ? `<tr class="bg-slate-950/95 border-b border-teal-800/60">
-            <td colspan="8" class="p-3">
+            <td colspan="9" class="p-3">
               ${buildWsQuickAlignHtml(r.member, r._tabKey || null)}
             </td>
           </tr>`
@@ -2101,7 +2175,7 @@ function renderSelectedDateView() {
       const subRows =
         r._isPresent && isSessionsExpanded
           ? `<tr>
-              <td colspan="8" class="bg-slate-950/90 px-6 py-3 border-l-4 border-teal-500">
+              <td colspan="9" class="bg-slate-950/90 px-6 py-3 border-l-4 border-teal-500">
                 <div class="text-[11px] font-bold text-teal-300 uppercase mb-2">
                   Sessions on ${escapeHtml(selectedDate)} — ${escapeHtml(r.member)}
                 </div>
@@ -2162,9 +2236,14 @@ function renderSelectedDateView() {
               }
             </div>
           </td>
-          <td class="px-4 py-2.5 font-bold whitespace-nowrap relative group cursor-help">
+          <td class="px-4 py-2.5 font-bold whitespace-nowrap relative group">
             <div class="flex items-center gap-2">
-              <span class="${r._isPresent ? "text-white" : "text-slate-300"} underline decoration-dotted decoration-teal-700 underline-offset-4">${escapeHtml(r.member)}</span>
+              <a href="va-detail.html#tab=${encodeURIComponent(r._tabKey || r.member)}&name=${encodeURIComponent(r.member)}"
+                 onclick="try { sessionStorage.setItem('kitsune_target_tab', JSON.stringify({ id: '${safeTabKey}', name: '${safeMember}' })); } catch (_) {}"
+                 title="Open ${escapeHtml(r.member)}'s VA Dossier"
+                 class="${r._isPresent ? "text-white hover:text-teal-300" : "text-slate-300 hover:text-teal-300"} underline decoration-dotted decoration-teal-700 hover:decoration-teal-400 underline-offset-4 transition-colors cursor-pointer">
+                ${escapeHtml(r.member)}
+              </a>
               ${presenceBadgeHtml}
               ${r._isHidden ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 border border-amber-700/60 font-mono">HIDDEN</span>' : ""}
             </div>
@@ -2192,6 +2271,9 @@ function renderSelectedDateView() {
                 <span>${formatHoverCoachingFocus(ovCoachingFocus)}</span>
               </div>
             </div>
+          </td>
+          <td class="px-3 py-2.5 text-center whitespace-nowrap">
+            ${renderFlagBadgeHtml(r._flag)}
           </td>
           <td class="px-3 py-2.5 text-center font-mono whitespace-nowrap">
             <span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-950 border border-slate-700 text-teal-200">
